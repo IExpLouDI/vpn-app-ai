@@ -15,6 +15,7 @@ from .protocol.control import (
 )
 from .protocol.data import DataChannel
 from .protocol.framing import frame_packet, read_frame
+from .status import StatusFile
 
 logger = logging.getLogger("pyvpn.client")
 
@@ -34,6 +35,9 @@ class VpnClient:
         self._routes_added: list[list[str]] = []
         self._last_seen: float = time.time()
         self._connected: bool = False
+        self._status: StatusFile | None = (
+            StatusFile(self.config.status_file) if self.config.status_file else None
+        )
 
     @property
     def _is_tcp(self) -> bool:
@@ -116,6 +120,14 @@ class VpnClient:
 
         try:
             while self._running:
+                if self.data:
+                    self.data.cleanup_fragments()
+                if self._status:
+                    self._status.maybe_write(
+                        f"{self.config.remote}:{self.config.port}",
+                        self._assigned_ip,
+                        "CONNECTED" if self._connected else "CONNECTING",
+                    )
                 if not self._handshake_done and self.session.is_established:
                     self._handshake_done = True
                     self.data = DataChannel(
@@ -150,6 +162,8 @@ class VpnClient:
                 self.tcp_writer.close()
             if tcp_read_task:
                 tcp_read_task.cancel()
+            if self._status:
+                self._status.close()
 
     def _send(self, data: bytes) -> None:
         if self._is_tcp and self.tcp_writer:
@@ -188,13 +202,20 @@ class VpnClient:
             return
         if not packet:
             return
-        wire = self.data.encrypt(packet)
-        self._send(wire)
+        for wire in self.data.encrypt(packet):
+            self._send(wire)
+            if self._status:
+                self._status.record_out(len(wire))
 
     def _handle_ip_assign(self, ip_str: str) -> None:
         logger.info("Received IP assignment: %s", ip_str)
         self._assigned_ip = ip_str
         self._connected = True
+        if self._status:
+            self._status.maybe_write(
+                f"{self.config.remote}:{self.config.port}",
+                self._assigned_ip, "CONNECTED", force=True,
+            )
 
         cidr = f"{ip_str}/24"
         self.tun.set_ip(cidr)
@@ -219,6 +240,8 @@ class VpnClient:
         if len(data) < 1:
             return
         self._last_seen = time.time()
+        if self._status:
+            self._status.record_in(len(data))
 
         opcode_val = data[0]
 

@@ -1,5 +1,6 @@
 import struct
 import logging
+import time
 
 from .messages import Opcode
 from .packet import encode_packet, decode_packet
@@ -9,6 +10,10 @@ logger = logging.getLogger("pyvpn.protocol.data")
 
 COMP_NONE = 0
 COMP_LZO = 1
+FRAG_MASK = 0x80
+
+MAX_PAYLOAD = 1400
+FRAG_TIMEOUT = 5.0
 
 _HAS_LZ4 = False
 _lz4_block = None
@@ -29,10 +34,10 @@ class DataChannel:
         self.cipher = cipher
         self.packet_counter = 0
         self.comp_lzo = comp_lzo and _HAS_LZ4
+        self._fragments: dict[int, dict] = {}
 
-    def encrypt(self, plaintext: bytes) -> bytes:
-        self.packet_counter += 1
-        counter_bytes = struct.pack("!I", self.packet_counter)
+    def _encrypt_one(self, plaintext: bytes, counter: int) -> bytes:
+        counter_bytes = struct.pack("!I", counter)
         aad = self.shared_id + counter_bytes
 
         if self.comp_lzo and len(plaintext) > 32:
@@ -49,6 +54,26 @@ class DataChannel:
         sid = int.from_bytes(self.shared_id, "big")
         return encode_packet(Opcode.DATA, sid, payload)
 
+    def encrypt(self, plaintext: bytes) -> list[bytes]:
+        self.packet_counter += 1
+        if len(plaintext) <= MAX_PAYLOAD:
+            return [self._encrypt_one(plaintext, self.packet_counter)]
+
+        start = self.packet_counter
+        total = (len(plaintext) + MAX_PAYLOAD - 1) // MAX_PAYLOAD
+        result = []
+
+        for i in range(total):
+            offset = i * MAX_PAYLOAD
+            chunk = plaintext[offset:offset + MAX_PAYLOAD]
+            frag_header = struct.pack("!BB", total, i)
+            frag_payload = bytes([FRAG_MASK | COMP_NONE]) + frag_header + chunk
+            encrypted = self._encrypt_one(frag_payload, start + i)
+            result.append(encrypted)
+
+        self.packet_counter = start + total - 1
+        return result
+
     def decrypt(self, wire_data: bytes) -> bytes | None:
         try:
             opcode, sid, payload = decode_packet(wire_data)
@@ -61,6 +86,7 @@ class DataChannel:
             return None
 
         counter_bytes = payload[:4]
+        pkt_counter = struct.unpack("!I", counter_bytes)[0]
         encrypted = payload[4:]
         aad = self.shared_id + counter_bytes
         try:
@@ -72,6 +98,40 @@ class DataChannel:
         if len(inner) < 1:
             return None
 
+        first_byte = inner[0]
+
+        if first_byte & FRAG_MASK:
+            if len(inner) < 4:
+                return None
+            total = inner[1]
+            index = inner[2]
+            raw = inner[3:]
+            group_id = pkt_counter - index
+
+            if group_id not in self._fragments:
+                self._fragments[group_id] = {
+                    "total": total,
+                    "fragments": {},
+                    "ts": time.time(),
+                }
+
+            buf = self._fragments[group_id]
+            if buf["total"] != total:
+                logger.warning("Fragment total mismatch, discarding")
+                self._fragments.pop(group_id, None)
+                return None
+
+            buf["fragments"][index] = raw
+
+            if len(buf["fragments"]) == total:
+                data = b"".join(buf["fragments"][i] for i in range(total))
+                self._fragments.pop(group_id, None)
+                return self._decompress(data)
+            return None
+        else:
+            return self._decompress(inner)
+
+    def _decompress(self, inner: bytes) -> bytes | None:
         comp_type = inner[0]
         raw = inner[1:]
 
@@ -89,3 +149,10 @@ class DataChannel:
         else:
             logger.warning("Unknown compression type: %d", comp_type)
             return None
+
+    def cleanup_fragments(self) -> None:
+        now = time.time()
+        stale = [gid for gid, buf in self._fragments.items()
+                 if now - buf["ts"] > FRAG_TIMEOUT]
+        for gid in stale:
+            self._fragments.pop(gid, None)

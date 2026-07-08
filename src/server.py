@@ -125,6 +125,9 @@ class VpnServer:
             while self._running:
                 self._cleanup_stale()
                 self._send_keepalives()
+                for cs in self.clients.values():
+                    if cs.data:
+                        cs.data.cleanup_fragments()
                 await asyncio.sleep(1)
         except KeyboardInterrupt:
             self.stop()
@@ -215,8 +218,8 @@ class VpnServer:
         if not cs or not cs.is_ready:
             return
 
-        wire = cs.data.encrypt(packet)
-        self._send_to(cs, wire)
+        for wire in cs.data.encrypt(packet):
+            self._send_to(cs, wire)
 
     def _get_or_create_session(self, addr: tuple, writer: asyncio.StreamWriter | None = None) -> ClientSession:
         if addr in self.clients:

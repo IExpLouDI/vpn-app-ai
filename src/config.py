@@ -20,6 +20,7 @@ class Config:
     keepalive_timeout: int = 120
     verb: int = 1
     redirect_gateway: bool = False
+    status_file: Optional[str] = None
     extra_options: dict = field(default_factory=dict)
 
     def get_mode(self) -> str:

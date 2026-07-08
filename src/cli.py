@@ -84,6 +84,11 @@ def parse_args(argv: list[str] | None = None) -> Config:
         action="store_true",
         help="Redirect all traffic through VPN",
     )
+    parser.add_argument(
+        "--status",
+        metavar="FILE",
+        help="Write status file periodically (e.g., /tmp/vpn.status)",
+    )
 
     ns = parser.parse_args(argv)
 
@@ -114,4 +119,5 @@ def parse_args(argv: list[str] | None = None) -> Config:
         keepalive_timeout=ns.keepalive[1],
         verb=ns.verb,
         redirect_gateway=ns.redirect_gateway,
+        status_file=ns.status,
     )
