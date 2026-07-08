@@ -29,9 +29,20 @@ class TunInterface:
 
         self.fd = os.open(CLONE_DEVICE, os.O_RDWR)
 
+        self._delete_existing_interface()
+
         flags = IFF_TUN | IFF_NO_PI
         ifr = struct.pack("16sH", self.name.encode("utf-8"), flags)
         fcntl.ioctl(self.fd, TUNSETIFF, ifr, True)
+
+    def _delete_existing_interface(self) -> None:
+        try:
+            subprocess.run(
+                ["ip", "link", "delete", self.name],
+                capture_output=True,
+            )
+        except Exception:
+            pass
 
     def close(self) -> None:
         if self.fd is not None:
