@@ -39,6 +39,10 @@ def parse_args(argv: list[str] | None = None) -> Config:
         help="Client IP/CIDR, e.g. 10.8.0.2/24",
     )
     parser.add_argument(
+        "--ifconfig-pool",
+        help="IP pool range for server allocation, e.g. 10.8.0.2-10.8.0.100",
+    )
+    parser.add_argument(
         "--ca",
         help="CA certificate file",
     )
@@ -100,6 +104,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
         remote=ns.remote,
         server=ns.server,
         ifconfig=ns.ifconfig,
+        ifconfig_pool=ns.ifconfig_pool,
         ca=ns.ca,
         cert=ns.cert,
         key=ns.key,

@@ -1,8 +1,9 @@
 import asyncio
 import logging
+import signal
 import time
 import ipaddress
-from struct import unpack
+import struct
 
 from .config import Config
 from .tun import TunInterface
@@ -13,6 +14,7 @@ from .protocol.control import (
     server_handle_client_finished,
 )
 from .protocol.data import DataChannel
+from .routing import IpPool, setup_nat, enable_ip_forward, add_route, delete_route
 
 logger = logging.getLogger("pyvpn.server")
 
@@ -34,6 +36,10 @@ class ClientSession:
     def is_ready(self) -> bool:
         return self.session.is_established and self.data is not None
 
+    @property
+    def client_id(self) -> str:
+        return str(self.addr)
+
 
 class VpnServer:
     def __init__(self, config: Config):
@@ -44,6 +50,11 @@ class VpnServer:
         self.ip_to_addr: dict[str, tuple] = {}
         self._running = False
 
+        self.ip_pool: IpPool | None = None
+        if config.server:
+            pool = config.ifconfig_pool or ""
+            self.ip_pool = IpPool(config.server, pool)
+
     @property
     def server_ip(self) -> str:
         if self.config.server:
@@ -52,6 +63,12 @@ class VpnServer:
         if self.config.ifconfig:
             return self.config.ifconfig
         return "10.8.0.1/24"
+
+    @property
+    def _server_network(self) -> str:
+        if self.config.server:
+            return self.config.server
+        return "10.8.0.0/24"
 
     async def run(self) -> None:
         logger.info("Server starting on port %d", self.config.port)
@@ -62,6 +79,14 @@ class VpnServer:
         self.tun.set_ip(self.server_ip)
         self.tun.set_mtu(1500)
 
+        if self.ip_pool:
+            logger.info("IP pool: %s, server=%s, pool_size=%d",
+                        self._server_network, self.server_ip.split("/")[0],
+                        self.ip_pool.allocated_count() + len(self.ip_pool._available))
+
+        enable_ip_forward()
+        add_route(self._server_network, dev=self.config.dev)
+
         loop = asyncio.get_event_loop()
 
         transport, protocol = await loop.create_datagram_endpoint(
@@ -70,6 +95,12 @@ class VpnServer:
         )
         self.transport = transport
         loop.add_reader(self.tun.fileno(), self._on_tun_readable)
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, self.stop)
+            except NotImplementedError:
+                pass
 
         self._running = True
         logger.info("Server ready on port %d", self.config.port)
@@ -81,23 +112,41 @@ class VpnServer:
         except KeyboardInterrupt:
             self.stop()
         finally:
+            self._cleanup()
             loop.remove_reader(self.tun.fileno())
             self.tun.close()
             transport.close()
+            logger.info("Server stopped")
 
     def stop(self) -> None:
         self._running = False
 
+    def _cleanup(self) -> None:
+        for cs in list(self.clients.values()):
+            if cs.virtual_ip:
+                delete_route(cs.virtual_ip, dev=self.config.dev)
+        self.clients.clear()
+        self.ip_to_addr.clear()
+        delete_route(self._server_network, dev=self.config.dev)
+
     def _cleanup_stale(self) -> None:
         now = time.time()
-        stale = [a for a, c in self.clients.items()
-                 if not c.session.is_established and
-                 c.session.is_expired()]
-        for addr in stale:
-            logger.info("Removing stale session: %s", addr)
-            cs = self.clients.pop(addr, None)
-            if cs and cs.virtual_ip and cs.virtual_ip in self.ip_to_addr:
+        to_remove = []
+        for addr, cs in self.clients.items():
+            if not cs.session.is_established and cs.session.is_expired():
+                to_remove.append(addr)
+        for addr in to_remove:
+            self._remove_client(addr)
+
+    def _remove_client(self, addr: tuple) -> None:
+        cs = self.clients.pop(addr, None)
+        if cs:
+            if cs.virtual_ip and cs.virtual_ip in self.ip_to_addr:
                 del self.ip_to_addr[cs.virtual_ip]
+                delete_route(cs.virtual_ip, dev=self.config.dev)
+            if self.ip_pool and cs.virtual_ip:
+                self.ip_pool.release(cs.client_id)
+            logger.info("Client %s removed (IP: %s)", addr, cs.virtual_ip)
 
     def _on_tun_readable(self) -> None:
         try:
@@ -132,17 +181,39 @@ class VpnServer:
         self.clients[addr] = cs
         return cs
 
+    def _assign_ip_to_client(self, cs: ClientSession) -> str | None:
+        if not self.ip_pool:
+            return None
+        ip = self.ip_pool.allocate(cs.client_id)
+        if ip:
+            cs.virtual_ip = ip
+            self.ip_to_addr[ip] = cs.addr
+            logger.info("Mapped %s -> %s", ip, cs.addr)
+
+            cs.session.assigned_ip = ip
+            sid = int.from_bytes(cs.session.session_id, "big")
+            ip_payload = struct.pack("!B", MessageType.IP_ASSIGN) + ip.encode("utf-8")
+            packet = struct.pack("!B Q", Opcode.CONTROL, sid) + ip_payload
+            self.transport.sendto(packet, cs.addr)
+
+            add_route(ip, dev=self.config.dev)
+
+        return ip
+
     def handle_udp_data(self, data: bytes, addr: tuple) -> None:
         if len(data) < 1:
             return
 
         opcode_val = data[0]
 
-        if opcode_val in (Opcode.HARD_RESET_CLIENT, Opcode.HARD_RESET_SERVER):
+        if opcode_val == Opcode.HARD_RESET_CLIENT:
             cs = self._get_or_create_session(addr)
             packets = server_handle_reset(cs.session, data)
             for p in packets:
                 self.transport.sendto(p, addr)
+            return
+
+        if opcode_val == Opcode.HARD_RESET_SERVER:
             return
 
         cs = self.clients.get(addr)
@@ -175,14 +246,8 @@ class VpnServer:
                         cs.session.peer_session_id or b"",
                         cs.session.cipher,
                     )
-                    logger.info("Server: data channel ready for %s", addr)
-
-                    pool = self.config.ifconfig_pool
-                    if pool and "-" in pool:
-                        start_ip = pool.split("-")[0]
-                        cs.virtual_ip = start_ip
-                        self.ip_to_addr[start_ip] = addr
-                        logger.info("Assigned IP %s to %s", start_ip, addr)
+                    self._assign_ip_to_client(cs)
+                    logger.info("Client %s ready (IP: %s)", addr, cs.virtual_ip)
 
         elif opcode_val == Opcode.DATA:
             if cs.is_ready:
@@ -194,10 +259,9 @@ class VpnServer:
 class ServerProtocol(asyncio.DatagramProtocol):
     def __init__(self, server: VpnServer):
         self.server = server
-        self.transport: asyncio.DatagramTransport | None = None
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
-        self.transport = transport
+        self.server.transport = transport
 
     def datagram_received(self, data: bytes, addr: tuple) -> None:
         self.server.handle_udp_data(data, addr)

@@ -1,6 +1,8 @@
 import asyncio
 import logging
-import time
+import signal
+import struct
+import subprocess
 
 from .config import Config
 from .tun import TunInterface
@@ -8,7 +10,7 @@ from .protocol.messages import Opcode, MessageType
 from .protocol.packet import decode_packet
 from .protocol.control import (
     Session, client_start_handshake, client_handle_reset_ack,
-    client_handle_server_hello, server_handle_client_finished,
+    client_handle_server_hello,
 )
 from .protocol.data import DataChannel
 
@@ -24,9 +26,13 @@ class VpnClient:
         self.data: DataChannel | None = None
         self._running = False
         self._handshake_done = False
+        self._assigned_ip: str | None = None
+        self._routes_added: list[list[str]] = []
 
     @property
     def client_ip(self) -> str:
+        if self._assigned_ip:
+            return self._assigned_ip
         if self.config.ifconfig:
             return self.config.ifconfig
         return "10.8.0.2/24"
@@ -37,14 +43,12 @@ class VpnClient:
             return
 
         logger.info("Connecting to %s:%d", self.config.remote, self.config.port)
-        logger.info("TUN IP: %s", self.client_ip)
 
         if self.config.ca and self.config.cert and self.config.key:
             self.session.configure(self.config.ca, self.config.cert, self.config.key)
 
         self.tun = TunInterface(self.config.dev)
         self.tun.open()
-        self.tun.set_ip(self.client_ip)
         self.tun.set_mtu(1500)
 
         loop = asyncio.get_event_loop()
@@ -56,6 +60,12 @@ class VpnClient:
         self.transport = transport
         loop.add_reader(self.tun.fileno(), self._on_tun_readable)
 
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, self.stop)
+            except NotImplementedError:
+                pass
+
         self._running = True
 
         packets = client_start_handshake(self.session)
@@ -65,16 +75,16 @@ class VpnClient:
 
         try:
             while self._running:
-                if not self._handshake_done and self.session.state.value >= 6:
+                if not self._handshake_done and self.session.is_established:
                     self._handshake_done = True
                     self.data = DataChannel(
                         self.session.session_id,
                         self.session.peer_session_id or b"",
                         self.session.cipher,
                     )
-                    logger.info("Data channel ready")
+                    logger.info("Data channel ready (waiting for IP assignment)")
 
-                if self._handshake_done:
+                if self._handshake_done and self._assigned_ip:
                     await asyncio.sleep(3600)
                 else:
                     await asyncio.sleep(0.1)
@@ -82,15 +92,23 @@ class VpnClient:
         except KeyboardInterrupt:
             self.stop()
         finally:
+            self._cleanup()
             loop.remove_reader(self.tun.fileno())
             self.tun.close()
-            transport.close()
+            if transport:
+                transport.close()
 
     def stop(self) -> None:
         self._running = False
 
+    def _cleanup(self) -> None:
+        for cmd in reversed(self._routes_added):
+            del_cmd = ["ip", "route", "delete"] + cmd[2:]
+            subprocess.run(del_cmd, capture_output=True)
+        self._routes_added.clear()
+
     def _on_tun_readable(self) -> None:
-        if not self._handshake_done or not self.data:
+        if not self._handshake_done or not self.data or not self._assigned_ip:
             return
         try:
             packet = self.tun.read()
@@ -100,6 +118,29 @@ class VpnClient:
             return
         wire = self.data.encrypt(packet)
         self.transport.sendto(wire)
+
+    def _handle_ip_assign(self, ip_str: str) -> None:
+        logger.info("Received IP assignment: %s", ip_str)
+        self._assigned_ip = ip_str
+
+        cidr = f"{ip_str}/24"
+        self.tun.set_ip(cidr)
+
+        server_ip = "10.8.0.1"
+        route_cmd = ["ip", "route", "add", "10.8.0.0/24", "dev", self.config.dev]
+        subprocess.run(route_cmd, capture_output=True)
+        self._routes_added.append(route_cmd)
+
+        if self.config.redirect_gateway:
+            gw_cmd = [
+                "ip", "route", "add", "default", "via", server_ip,
+                "dev", self.config.dev, "metric", "50",
+            ]
+            subprocess.run(gw_cmd, capture_output=True)
+            self._routes_added.append(gw_cmd)
+            logger.info("Default route redirected via VPN")
+
+        logger.info("TUN configured: %s/24 via %s", ip_str, self.config.dev)
 
     def handle_udp_data(self, data: bytes) -> None:
         if len(data) < 1:
@@ -128,10 +169,11 @@ class VpnClient:
                 packets = client_handle_server_hello(self.session, inner)
                 for p in packets:
                     self.transport.sendto(p)
-            elif msg_type == MessageType.CLIENT_FINISHED:
-                packets = server_handle_client_finished(self.session, inner)
-                for p in packets:
-                    self.transport.sendto(p)
+            elif msg_type == MessageType.IP_ASSIGN:
+                ip_str = inner.decode("utf-8")
+                self._handle_ip_assign(ip_str)
+            elif msg_type == MessageType.KEEPALIVE:
+                pass
 
             return
 
