@@ -14,6 +14,7 @@ from .protocol.control import (
     server_handle_client_finished,
 )
 from .protocol.data import DataChannel
+from .protocol.framing import frame_packet, read_frame
 from .routing import IpPool, setup_nat, enable_ip_forward, add_route, delete_route
 
 logger = logging.getLogger("pyvpn.server")
@@ -31,6 +32,8 @@ class ClientSession:
         self.data: DataChannel | None = None
         self.virtual_ip: str | None = None
         self.last_seen: float = time.time()
+        self.last_keepalive: float = 0.0
+        self.writer: asyncio.StreamWriter | None = None
 
     @property
     def is_ready(self) -> bool:
@@ -46,6 +49,7 @@ class VpnServer:
         self.config = config
         self.tun: TunInterface | None = None
         self.transport: asyncio.DatagramTransport | None = None
+        self.tcp_server: asyncio.AbstractServer | None = None
         self.clients: dict[tuple, ClientSession] = {}
         self.ip_to_addr: dict[str, tuple] = {}
         self._running = False
@@ -70,8 +74,12 @@ class VpnServer:
             return self.config.server
         return "10.8.0.0/24"
 
+    @property
+    def _is_tcp(self) -> bool:
+        return self.config.proto == "tcp"
+
     async def run(self) -> None:
-        logger.info("Server starting on port %d", self.config.port)
+        logger.info("Server starting on port %d (%s)", self.config.port, self.config.proto)
         logger.info("TUN IP: %s", self.server_ip)
 
         self.tun = TunInterface(self.config.dev)
@@ -89,11 +97,19 @@ class VpnServer:
 
         loop = asyncio.get_event_loop()
 
-        transport, protocol = await loop.create_datagram_endpoint(
-            lambda: ServerProtocol(self),
-            local_addr=("0.0.0.0", self.config.port),
-        )
-        self.transport = transport
+        if self._is_tcp:
+            tcp_server = await asyncio.start_server(
+                self._handle_tcp_client, "0.0.0.0", self.config.port,
+            )
+            self.tcp_server = tcp_server
+            logger.info("TCP server listening on port %d", self.config.port)
+        else:
+            transport, protocol = await loop.create_datagram_endpoint(
+                lambda: ServerProtocol(self),
+                local_addr=("0.0.0.0", self.config.port),
+            )
+            self.transport = transport
+
         loop.add_reader(self.tun.fileno(), self._on_tun_readable)
 
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -108,6 +124,7 @@ class VpnServer:
         try:
             while self._running:
                 self._cleanup_stale()
+                self._send_keepalives()
                 await asyncio.sleep(1)
         except KeyboardInterrupt:
             self.stop()
@@ -115,7 +132,10 @@ class VpnServer:
             self._cleanup()
             loop.remove_reader(self.tun.fileno())
             self.tun.close()
-            transport.close()
+            if self.transport:
+                self.transport.close()
+            if self.tcp_server:
+                self.tcp_server.close()
             logger.info("Server stopped")
 
     def stop(self) -> None:
@@ -125,15 +145,41 @@ class VpnServer:
         for cs in list(self.clients.values()):
             if cs.virtual_ip:
                 delete_route(cs.virtual_ip, dev=self.config.dev)
+            self._close_tcp_writer(cs)
         self.clients.clear()
         self.ip_to_addr.clear()
         delete_route(self._server_network, dev=self.config.dev)
 
+    def _close_tcp_writer(self, cs: ClientSession) -> None:
+        if cs.writer and not cs.writer.is_closing():
+            cs.writer.close()
+
+    def _send_to(self, cs: ClientSession, data: bytes) -> None:
+        if self._is_tcp and cs.writer:
+            cs.writer.write(frame_packet(data))
+        elif self.transport:
+            self.transport.sendto(data, cs.addr)
+
+    def _send_keepalives(self) -> None:
+        now = time.time()
+        interval = self.config.keepalive_interval
+        for addr, cs in list(self.clients.items()):
+            if cs.is_ready and now - cs.last_keepalive >= interval:
+                sid = int.from_bytes(cs.session.session_id, "big")
+                payload = struct.pack("!B", MessageType.KEEPALIVE)
+                packet = struct.pack("!B Q", Opcode.CONTROL, sid) + payload
+                self._send_to(cs, packet)
+                cs.last_keepalive = now
+
     def _cleanup_stale(self) -> None:
         now = time.time()
+        timeout = self.config.keepalive_timeout
         to_remove = []
         for addr, cs in self.clients.items():
-            if not cs.session.is_established and cs.session.is_expired():
+            if cs.session.is_established and now - cs.last_seen > timeout:
+                logger.warning("Client %s stale (last seen %.1fs ago)", addr, now - cs.last_seen)
+                to_remove.append(addr)
+            elif not cs.session.is_established and cs.session.is_expired():
                 to_remove.append(addr)
         for addr in to_remove:
             self._remove_client(addr)
@@ -146,6 +192,7 @@ class VpnServer:
                 delete_route(cs.virtual_ip, dev=self.config.dev)
             if self.ip_pool and cs.virtual_ip:
                 self.ip_pool.release(cs.client_id)
+            self._close_tcp_writer(cs)
             logger.info("Client %s removed (IP: %s)", addr, cs.virtual_ip)
 
     def _on_tun_readable(self) -> None:
@@ -169,15 +216,16 @@ class VpnServer:
             return
 
         wire = cs.data.encrypt(packet)
-        self.transport.sendto(wire, client_addr)
+        self._send_to(cs, wire)
 
-    def _get_or_create_session(self, addr: tuple) -> ClientSession:
+    def _get_or_create_session(self, addr: tuple, writer: asyncio.StreamWriter | None = None) -> ClientSession:
         if addr in self.clients:
             return self.clients[addr]
         session = Session(is_server=True)
         if self.config.ca and self.config.cert and self.config.key:
             session.configure(self.config.ca, self.config.cert, self.config.key)
         cs = ClientSession(addr, session)
+        cs.writer = writer
         self.clients[addr] = cs
         return cs
 
@@ -194,11 +242,28 @@ class VpnServer:
             sid = int.from_bytes(cs.session.session_id, "big")
             ip_payload = struct.pack("!B", MessageType.IP_ASSIGN) + ip.encode("utf-8")
             packet = struct.pack("!B Q", Opcode.CONTROL, sid) + ip_payload
-            self.transport.sendto(packet, cs.addr)
+            self._send_to(cs, packet)
 
             add_route(ip, dev=self.config.dev)
 
         return ip
+
+    async def _handle_tcp_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        addr = writer.get_extra_info("peername")
+        logger.info("TCP client connected: %s", addr)
+
+        cs = self._get_or_create_session(addr, writer)
+
+        try:
+            while self._running:
+                data = await read_frame(reader)
+                if data is None:
+                    break
+                self.handle_udp_data(data, addr)
+        except ConnectionError:
+            pass
+        finally:
+            self._remove_client(addr)
 
     def handle_udp_data(self, data: bytes, addr: tuple) -> None:
         if len(data) < 1:
@@ -210,7 +275,7 @@ class VpnServer:
             cs = self._get_or_create_session(addr)
             packets = server_handle_reset(cs.session, data)
             for p in packets:
-                self.transport.sendto(p, addr)
+                self._send_to(cs, p)
             return
 
         if opcode_val == Opcode.HARD_RESET_SERVER:
@@ -234,20 +299,23 @@ class VpnServer:
             msg_type = MessageType(payload[0])
             inner = payload[1:] if len(payload) > 1 else b""
 
-            handler = CONTROL_HANDLERS.get(msg_type)
-            if handler:
+            if msg_type in CONTROL_HANDLERS:
+                handler = CONTROL_HANDLERS[msg_type]
                 packets = handler(cs.session, inner)
                 for p in packets:
-                    self.transport.sendto(p, addr)
+                    self._send_to(cs, p)
 
                 if cs.session.is_established and cs.data is None:
                     cs.data = DataChannel(
                         cs.session.session_id,
                         cs.session.peer_session_id or b"",
                         cs.session.cipher,
+                        comp_lzo=self.config.comp_lzo,
                     )
                     self._assign_ip_to_client(cs)
                     logger.info("Client %s ready (IP: %s)", addr, cs.virtual_ip)
+            elif msg_type == MessageType.KEEPALIVE:
+                pass
 
         elif opcode_val == Opcode.DATA:
             if cs.is_ready:
