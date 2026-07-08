@@ -1,8 +1,12 @@
 import os
-import fcntl
 import struct
 import subprocess
 import platform
+
+try:
+    import fcntl
+except ModuleNotFoundError:
+    fcntl = None
 
 TUNSETIFF = 0x400454ca
 IFF_TUN = 0x0001
@@ -17,6 +21,9 @@ class TunInterface:
         self.fd = None
 
     def open(self) -> None:
+        if fcntl is None:
+            raise RuntimeError("TUN interface is not available on this platform (fcntl missing)")
+
         if not os.path.exists(CLONE_DEVICE):
             raise RuntimeError(f"TUN clone device not found at {CLONE_DEVICE}")
 
