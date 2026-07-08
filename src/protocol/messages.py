@@ -1,0 +1,27 @@
+import enum
+
+
+class Opcode(enum.IntEnum):
+    HARD_RESET_CLIENT = 1
+    HARD_RESET_SERVER = 2
+    CONTROL = 3
+    ACK = 4
+    DATA = 5
+
+
+class MessageType(enum.IntEnum):
+    CLIENT_HELLO = 1
+    SERVER_HELLO = 2
+    CLIENT_FINISHED = 3
+    KEEPALIVE = 4
+    SHUTDOWN = 5
+    IP_ASSIGN = 6
+
+
+HARD_RESET_TIMEOUT = 5.0
+HANDSHAKE_TIMEOUT = 30.0
+KEEPALIVE_INTERVAL = 10.0
+KEEPALIVE_TIMEOUT = 120.0
+
+MAX_PACKET_SIZE = 65535
+MAX_DATA_PAYLOAD = 1500
