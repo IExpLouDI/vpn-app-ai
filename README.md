@@ -200,7 +200,7 @@ VPN client.
 ```
 vpn-app/
 ├── README.md
-├── ARCHITECTURE.md
+├── README.md
 ├── requirements.txt
 ├── setup.py
 ├── examples/
