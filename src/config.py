@@ -52,6 +52,14 @@ DIRECTIVES = {
     "redirect-gateway": "redirect_gateway",
 }
 
+NETMASK_DIRECTIVES = {"server"}
+POOL_DIRECTIVES = {"ifconfig-pool"}
+
+def _netmask_to_cidr(netmask: str) -> int:
+    octets = netmask.split(".")
+    binary = "".join(f"{int(o):08b}" for o in octets)
+    return binary.count("1")
+
 
 def _parse_config(path: str) -> Config:
     kwargs = {}
@@ -76,6 +84,11 @@ def _parse_config(path: str) -> Config:
                     _set_value(kwargs, a, v)
             elif directive in ("comp-lzo", "redirect-gateway"):
                 kwargs[attr] = True
+            elif directive in NETMASK_DIRECTIVES and len(args) == 2:
+                prefix = _netmask_to_cidr(args[1])
+                kwargs[attr] = f"{args[0]}/{prefix}"
+            elif directive in POOL_DIRECTIVES and len(args) >= 2:
+                kwargs[attr] = f"{args[0]}-{args[1]}"
             else:
                 _set_value(kwargs, attr, args[0] if len(args) == 1 else args)
 

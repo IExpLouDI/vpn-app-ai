@@ -1,5 +1,5 @@
 import argparse
-from config import Config
+from .config import Config
 
 
 def parse_args(argv: list[str] | None = None) -> Config:
