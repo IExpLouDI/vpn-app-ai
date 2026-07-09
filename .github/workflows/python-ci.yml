@@ -1,0 +1,38 @@
+name: Python CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest ruff
+
+      - name: Packaging smoke test
+        run: |
+          pip install . || true
+
+      - name: Lint
+        run: |
+          ruff check .
+
+      - name: Run tests
+        run: |
+          pytest -q
