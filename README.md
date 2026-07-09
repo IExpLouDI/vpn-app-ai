@@ -2,7 +2,7 @@
 
 ## Overview
 
-A minimal but functional VPN implementation in Python, inspired by OpenVPN's architecture. The application creates a secure tunnel between a client and server, forwarding IP packets through an encrypted UDP connection.
+A minimal but functional VPN educational VPN prototype inspired by OpenVPN concepts. The application creates a secure tunnel between a client and server, forwarding IP packets through an encrypted UDP connection.
 
 > **Note:** This is an educational project. It implements core OpenVPN concepts (TUN interface, control/data channel separation, TLS authentication, AES-GCM encryption) but is not intended for production use.
 
