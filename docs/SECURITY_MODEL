@@ -1,0 +1,42 @@
+# Security model
+
+## Project status
+
+This repository is an educational VPN prototype and must not claim production-grade security unless every claim is linked to code and tests.
+
+## Documentation rule
+
+Every security property must be classified as one of:
+- Implemented and tested
+- Implemented but not fully tested
+- Planned
+- Not implemented
+
+## Security properties checklist
+
+| Property | Status | Evidence |
+|---|---|---|
+| Mutual authentication | Planned / verify | Link source and tests |
+| Session key derivation | Planned / verify | Link source and tests |
+| Replay protection | Planned / verify | Link source and tests |
+| Nonce uniqueness | Planned / verify | Link source and tests |
+| Forward secrecy | Planned / verify | Link source and tests |
+| Key rotation | Planned / verify | Link source and tests |
+| DoS resistance on handshake | Planned / verify | Link source and tests |
+| Privilege reduction | Planned / verify | Link source and tests |
+
+## Threat model questions
+
+- What can an unauthenticated network attacker do?
+- What can a replay attacker do?
+- What happens if a client certificate is stolen?
+- What happens if the server process crashes mid-session?
+- What happens if route/NAT cleanup fails?
+
+## Non-goals
+
+Until verified otherwise, the repository should not claim:
+- production readiness,
+- audited cryptographic design,
+- strong resistance to active attackers,
+- hard multi-tenant isolation.
