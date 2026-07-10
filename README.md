@@ -111,7 +111,7 @@ is verified. Useful for local testing.
 | Keep-alive & timeout | ✅ Implemented | `src/client.py`, `src/server.py` |
 | Auto-reconnect | ✅ Implemented | `src/client.py` |
 | Windows TUN support | ⚠️ Partial | `src/tun_windows.py` |
-| TLS 1.3 control channel | ❌ Planned (not implemented) | — |
+| TLS 1.3 control channel | ✅ Implemented | `src/protocol/tls_channel.py` |
 | Replay protection (dedup window) | ❌ Planned (not implemented) | — |
 | Privilege separation | ❌ Planned (not implemented) | — |
 | Certificate generation scripts | ❌ Planned (not implemented) | — |
@@ -386,7 +386,7 @@ Wire format: [PacketID][Nonce][Ciphertext][Auth Tag]
 
 ## Planned Enhancements
 
-- **TLS 1.3 control channel**: Replace custom handshake with full TLS 1.3 over UDP
+- **TLS 1.3 control channel**: ✅ Implemented — mutual TLS 1.3 over TCP control channel (`src/protocol/tls_channel.py`); the data channel remains AES-256-GCM over UDP.
 - **Replay protection**: PacketID counter + server-side dedup window
 - **Privilege separation**: Drop root after TUN creation + cert load
 - **Certificate generation scripts**: `certs/generate.sh` using openssl
@@ -404,7 +404,7 @@ Wire format: [PacketID][Nonce][Ciphertext][Auth Tag]
 | Certificate validation | ✅ Chain verification, signature checks |
 | Auth tag verification | ✅ AES-GCM tag validation |
 | Key derivation | ✅ HKDF with salt |
-| TLS 1.3 control channel | ❌ Planned — currently custom handshake |
+| TLS 1.3 control channel | ✅ Implemented — mutual TLS 1.3 over TCP (`src/protocol/tls_channel.py`) |
 | Replay attack mitigation | ❌ Planned — counter exists, no dedup window yet |
 | DoS protection on handshake | ❌ Planned |
 | Privilege separation | ❌ Planned |
