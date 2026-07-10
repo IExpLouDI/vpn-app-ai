@@ -1,10 +1,86 @@
-# Python VPN Application — Current State
+# Python VPN Application
 
 ## Overview
 
-A minimal educational VPN prototype inspired by OpenVPN concepts. Creates a secure tunnel between a client and server, forwarding IP packets through an encrypted UDP/TCP connection.
+A minimal educational VPN prototype inspired by OpenVPN concepts. It creates a secure
+tunnel between a client and a server, forwarding IP packets through an encrypted
+UDP/TCP connection.
 
-> **Note:** This is an educational project. It is **not** intended for production use.
+> **Disclaimer:** This is an educational project. It is **not** intended for production
+> use and has **not** undergone a cryptographic audit. See
+> [Threat Model and Non-Goals](#threat-model-and-non-goals).
+
+---
+
+## Implementation Status (canonical)
+
+This is the **single source of truth** for feature status. All other sections and the
+companion doc [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) reference
+this table. Status legend:
+
+- ✅ **Implemented** — available in the running VPN today
+- ⚠️ **Partial** — works with caveats / opt-in only
+- 🧪 **Experimental** — implemented as a module but not the default runtime path
+- ❌ **Planned** — not implemented
+
+| Feature | Status | Default | Notes / Files |
+|---|---|---|---|
+| TUN interface (Linux) | ✅ Implemented | on (required) | `src/tun.py`; needs `/dev/net/tun` + `CAP_NET_ADMIN`/root |
+| TUN interface (Windows) | ⚠️ Partial | off | `src/tun_windows.py`; TUN only, no iptables/routing |
+| UDP / TCP transport | ✅ Implemented | UDP | `proto udp\|tcp`; `src/client.py`, `src/server.py` |
+| Custom ECDH handshake (X25519 + HKDF) | ✅ Implemented | **on (default control)** | `src/protocol/control.py`, `src/crypto/key_exchange.py` |
+| Certificate loading & verification | ✅ Implemented | optional | omitted → dev mode (no auth); `src/crypto/certificates.py` |
+| AES-256-GCM data encryption | ✅ Implemented | on | `src/crypto/cipher.py`, `src/protocol/data.py` |
+| Packet fragmentation / reassembly | ✅ Implemented | automatic | auto for payloads > 1400 B; MTU 1500; `src/protocol/data.py` |
+| LZ4 compression | ✅ Implemented | **off** (opt-in `--comp-lzo`) | `src/protocol/data.py` |
+| Config parser (OpenVPN-style) | ✅ Implemented | — | `src/config.py` |
+| Multi-client server | ✅ Implemented | on (server mode) | `src/server.py` |
+| Virtual IP pool | ✅ Implemented | on (server mode) | `src/routing.py` |
+| NAT / iptables MASQUERADE | ✅ Implemented | on (server mode) | requires root/`iptables` |
+| Keep-alive & timeout | ✅ Implemented | on | `keepalive 10 120` |
+| Auto-reconnect | ✅ Implemented | on (client) | `src/client.py` |
+| Replay protection (dedup window) | ✅ Implemented | on | sliding-window PacketID dedup; `src/protocol/replay.py` |
+| TLS 1.3 control channel | 🧪 Experimental | **off** | mutual TLS 1.3 over TCP in `src/protocol/tls_channel.py`; **not** wired as the default control path (the running VPN still uses the custom X25519 ECDH handshake) |
+| Privilege separation | ⚠️ Partial | **off** (opt-in `--user`) | drops root after setup; per-client routes / NAT still require root; `src/privileges.py` |
+| Certificate generation scripts | ❌ Planned | — | `certs/generate.sh` |
+| Integration CI (privileged) | ❌ Planned | — | root + TUN system tests in GitHub Actions |
+| Windows full support | ❌ Planned | — | full TUN driver + routing integration |
+| DoS protection on handshake | ❌ Planned | — | rate limiting |
+| Key rotation / renegotiation | ❌ Planned | — | no rekeying |
+| Memory secret locking (`mlock`) | ❌ Planned | — | key material can hit swap |
+
+---
+
+## Current Capabilities
+
+What is available in the **runtime today** (no flags required unless noted):
+
+- Point-to-multipoint VPN: one server, many clients, each with a virtual IP from a pool.
+- Encrypted data plane: AES-256-GCM over UDP (default) or TCP.
+- Authenticated control plane via X25519 ECDH + HKDF key derivation and X.509
+  certificate verification (server and client certs, CA-chained).
+- Replay protection on the data channel (sliding-window PacketID dedup).
+- IP packet fragmentation/reassembly and optional LZ4 compression.
+- Keep-alive, session timeout, and client auto-reconnect.
+- NAT (iptables MASQUERADE) and per-client route installation on the server.
+- **Dev mode**: omit `ca`/`cert`/`key` to run the handshake without certificate
+  authentication (encryption still active, but neither side is verified).
+
+## Experimental Features
+
+- **TLS 1.3 control channel** — `src/protocol/tls_channel.py` provides a mutual-TLS-1.3
+  TCP control channel with a tested API (`tests/test_tls_channel.py`). It is **not** yet
+  wired into the default server/client runtime, which still uses the custom ECDH
+  handshake. Treat it as a reference module / building block, not a production path.
+
+## Planned Work
+
+- Certificate generation scripts (`certs/generate.sh`).
+- Privileged **integration CI** (root + TUN) automated in GitHub Actions.
+- Full **Windows** support (TUN driver + routing).
+- **DoS** protection / rate limiting on the handshake.
+- Key rotation / session renegotiation.
+- Memory secret locking (`mlock`).
 
 ---
 
@@ -14,8 +90,8 @@ A minimal educational VPN prototype inspired by OpenVPN concepts. Creates a secu
 
 - Linux with TUN support (`/dev/net/tun`)
 - Python 3.10+
-- `iproute2` (provides `ip` command)
-- Root privileges (for TUN device and iptables)
+- `iproute2` (provides the `ip` command)
+- Root privileges (for the TUN device and `iptables`)
 
 ### 1. Install
 
@@ -27,7 +103,8 @@ pip install .
 
 ### 2. Generate certificates (optional)
 
-Without certificates the handshake still works (no authentication). For production-like setup:
+Without certificates the handshake still works (dev mode, no authentication). For
+authenticated mode:
 
 ```bash
 # CA
@@ -50,10 +127,10 @@ openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
 ### 3. Start the server
 
 ```bash
-# With certificates (authenticated mode):
+# Authenticated mode:
 sudo pyvpn --server 10.8.0.0/24 --ca ca.crt --cert server.crt --key server.key
 
-# Without certificates (dev mode):
+# Dev mode (no certificates):
 sudo pyvpn --server 10.8.0.0/24
 ```
 
@@ -65,16 +142,9 @@ sudo pyvpn --remote SERVER_IP --ca ca.crt --cert client.crt --key client.key
 
 Replace `SERVER_IP` with the server's actual IP address.
 
-### 5. Using a config file (OpenVPN-style)
-
-```bash
-sudo pyvpn -c examples/server.conf
-sudo pyvpn -c examples/client.conf
-```
-
 ### Running without sudo (alternative)
 
-If `sudo` doesn't preserve `PATH`, use a wrapper script:
+If `sudo` does not preserve `PATH`, use a wrapper that points at the `src` package:
 
 ```bash
 cat > /usr/local/bin/pyvpn-sudo.sh << 'SCRIPT'
@@ -87,35 +157,103 @@ sudo /usr/local/bin/pyvpn-sudo.sh --server 10.8.0.0/24
 
 ### Dev mode (no certificate authentication)
 
-Omit `--ca`, `--cert`, and `--key` to skip certificate authentication. The
-handshake and encryption still use X25519 + AES-256-GCM, but neither side
-is verified. Useful for local testing.
+Omit `--ca`, `--cert`, and `--key` to skip certificate authentication. The handshake and
+encryption still use X25519 + AES-256-GCM, but neither side is verified. Useful for
+local testing only.
 
 ---
 
-## Implementation Status
+## Minimal Working Setup
 
-| Component | Status | Files |
-|---|---|---|
-| TUN interface | ✅ Implemented | `src/tun.py` |
-| UDP/TCP transport | ✅ Implemented | `src/client.py`, `src/server.py` |
-| Custom ECDH handshake (X25519 + HKDF) | ✅ Implemented | `src/protocol/control.py`, `src/crypto/key_exchange.py` |
-| Certificate loading & verification | ✅ Implemented | `src/crypto/certificates.py` |
-| AES-256-GCM data encryption | ✅ Implemented | `src/crypto/cipher.py`, `src/protocol/data.py` |
-| Packet fragmentation/reassembly | ✅ Implemented | `src/protocol/data.py` |
-| LZ4 compression | ✅ Implemented | `src/protocol/data.py` |
-| Config parser (OpenVPN-style) | ✅ Implemented | `src/config.py` |
-| Multi-client server | ✅ Implemented | `src/server.py` |
-| Virtual IP pool | ✅ Implemented | `src/routing.py` |
-| NAT / iptables MASQUERADE | ✅ Implemented | `src/routing.py` |
-| Keep-alive & timeout | ✅ Implemented | `src/client.py`, `src/server.py` |
-| Auto-reconnect | ✅ Implemented | `src/client.py` |
-| Windows TUN support | ⚠️ Partial | `src/tun_windows.py` |
-| TLS 1.3 control channel | ✅ Implemented | `src/protocol/tls_channel.py` |
-| Replay protection (dedup window) | ✅ Implemented | `src/protocol/replay.py`, `src/protocol/data.py` |
-| Privilege separation | ⚠️ Partial | `src/privileges.py`; opt-in via `--user` |
-| Certificate generation scripts | ❌ Planned (not implemented) | — |
-| Integration CI | ❌ Planned (not implemented) | — |
+A single client/server pair that can be launched and verified end-to-end. The two config
+files are intentionally symmetric — `examples/server.conf` and `examples/client.conf`.
+
+**`examples/server.conf`**
+
+```ini
+dev tun
+proto udp
+port 1194
+server 10.8.0.0 255.255.255.0
+ifconfig-pool 10.8.0.2 10.8.0.100
+ca ca.crt
+cert server.crt
+key server.key
+cipher AES-256-GCM
+keepalive 10 120
+verb 3
+```
+
+**`examples/client.conf`**
+
+```ini
+dev tun
+proto udp
+remote 203.0.113.10
+port 1194
+ca ca.crt
+cert client.crt
+key client.key
+cipher AES-256-GCM
+keepalive 10 120
+verb 3
+```
+
+**Launch**
+
+```bash
+# Terminal 1 (server, as root):
+sudo pyvpn -c examples/server.conf
+
+# Terminal 2 (client, as root):
+sudo pyvpn -c examples/client.conf
+```
+
+**Certificate requirements**
+
+- A shared CA (`ca.crt`) must be present on both sides.
+- `server.crt`/`server.key` are loaded by the server; `client.crt`/`client.key` by the
+  client. Certs must chain to `ca.crt` (see *Quick Start* for an `openssl` recipe).
+
+**Expected verification result**
+
+- Client log shows `Data channel ready` and `TUN configured: 10.8.0.x/24`.
+- The client receives a virtual IP from the server pool (e.g. `10.8.0.2`).
+- Traffic routed to the tunnel (or, with `--redirect-gateway`, all traffic) is encrypted
+  with AES-256-GCM and protected against replay.
+- Stopping either side triggers a clean teardown / client auto-reconnect.
+
+---
+
+## Configuration Reference
+
+The config file is an **OpenVPN-style contract**: every directive maps to a typed
+`Config` field (`src/config.py`). Unknown directives are preserved under
+`extra_options` and ignored by the core. CLI flags override file values.
+
+| Directive | Purpose | Type | Required | Allowed values | Default | Constraints |
+|---|---|---|---|---|---|---|
+| `dev` | TUN device name | string | no | any | `tun` | Linux only; Windows partial |
+| `proto` | Transport protocol | enum | no | `udp`, `tcp` | `udp` | — |
+| `port` | Listen/connect port | int | no | 1–65535 | `1194` | — |
+| `remote` | Server address (client) | string | client mode | hostname/IP | — | required in client mode |
+| `server` | Server subnet (server) | CIDR | server mode | `A.B.C.D/M` (or `A.B.C.D netmask`) | — | required in server mode |
+| `ifconfig` | Client static IP/CIDR | CIDR | no | `A.B.C.D/M` | — | client side |
+| `ifconfig-pool` | Client IP range (server) | range | no | `start-end` | subnet−.2 … −.254 | server side |
+| `ca` | CA certificate (PEM) | path | auth mode | file | — | enables cert verification |
+| `cert` | Local certificate (PEM) | path | auth mode | file | — | requires `ca`+`key` |
+| `key` | Local private key (PEM) | path | auth mode | file | — | requires `ca`+`cert` |
+| `cipher` | Data-channel cipher | string | no | `AES-256-GCM` | `AES-256-GCM` | only AES-256-GCM implemented |
+| `comp-lzo` | Enable LZ4 compression | flag | no | (present/absent) | off | opt-in |
+| `keepalive` | Keepalive interval/timeout | pair | no | `int int` | `10 120` | seconds |
+| `verb` | Log verbosity | int | no | 0–4 | `1` | — |
+| `redirect-gateway` | Route all traffic via VPN | flag | no | (present/absent) | off | server pushes default route |
+| `status` | Periodic status file | path | no | file | — | — |
+| `user` | Drop privileges after setup | string | no | system username | — | privilege separation (partial) |
+
+> **Auth mode:** if `ca`/`cert`/`key` are all omitted, the process runs in **dev mode**
+> (handshake succeeds without certificate verification). Providing them enables mutual
+> X.509 authentication.
 
 ---
 
@@ -159,7 +297,8 @@ is verified. Useful for local testing.
 | Control Channel | Handshake, auth, key exchange | Custom ECDH (X25519) + certificate signing | X.509 certificates |
 | Data Channel | IP packet tunneling | AES-256-GCM | Symmetric session keys (HKDF-derived) |
 
-Both channels are multiplexed over a single UDP connection using a lightweight frame header.
+Both channels are multiplexed over a single UDP/TCP connection using a lightweight frame
+header.
 
 ---
 
@@ -190,6 +329,7 @@ Manages the handshake, authentication, and key exchange.
 7. Periodic `KEEPALIVE` to maintain session
 
 **Packet format:**
+
 ```
 [Opcode (1)] [SessionID (8)] [Payload]
 ```
@@ -206,6 +346,7 @@ Encrypts and tunnels IP packets.
 - Peer decrypts → decompresses → writes to its TUN interface
 
 **Data frame format:**
+
 ```
 [PacketID (4)] [Nonce (12)] [Ciphertext...] [Tag (16)]
 ```
@@ -220,24 +361,7 @@ Encrypts and tunnels IP packets.
 
 ### 5. Configuration — `config.py`
 
-Parses OpenVPN-style configuration files.
-
-**Supported directives:**
-```
-dev tun
-proto udp
-port 1194
-ca ca.crt
-cert server.crt
-key server.key
-server 10.8.0.0 255.255.255.0
-ifconfig-pool 10.8.0.2 10.8.0.100
-cipher AES-256-GCM
-comp-lzo
-keepalive 10 120
-verb 3
-```
-
+Parses OpenVPN-style configuration files (see [Configuration Reference](#configuration-reference)).
 Returns a `Config` dataclass with typed fields.
 
 ### 6. Routing — `routing.py`
@@ -286,51 +410,6 @@ VPN client.
 
 ---
 
-## Project Structure
-
-```
-vpn-app/
-├── README.md
-├── requirements.txt
-├── setup.py
-├── examples/
-│   ├── server.conf
-│   └── client.conf
-├── src/
-│   ├── __init__.py
-│   ├── app.py                      # Entry point
-│   ├── cli.py                      # CLI argument parsing
-│   ├── config.py                   # Config file parser
-│   ├── tun.py                      # TUN interface (Linux)
-│   ├── tun_windows.py              # TUN interface (Windows, partial)
-│   ├── server.py                   # VPN server
-│   ├── client.py                   # VPN client
-│   ├── routing.py                  # Routing & iptables
-│   ├── status.py                   # Status file output
-│   ├── crypto/
-│   │   ├── __init__.py
-│   │   ├── cipher.py               # AES-256-GCM
-│   │   ├── certificates.py         # Load/verify certs
-│   │   └── key_exchange.py         # X25519 + HKDF
-│   ├── protocol/
-│   │   ├── __init__.py
-│   │   ├── control.py              # Control channel (ECDH handshake)
-│   │   ├── data.py                 # Data channel (encrypted tunnel)
-│   │   ├── packet.py               # Binary packet format
-│   │   ├── framing.py              # TCP frame length prefixing
-│   │   └── messages.py             # Opcodes and message types
-│   └── auth/
-│       └── __init__.py
-└── tests/
-    ├── __init__.py
-    ├── test_handshake.py
-    ├── test_integration.py
-    ├── test_multi_client.py
-    └── test_phase4.py
-```
-
----
-
 ## Handshake Protocol Details
 
 ### Opcodes
@@ -373,41 +452,118 @@ session_key = hkdf.derive(shared)
 
 ```
 Plaintext:  [IP Packet]
-              │
-              ▼ compress (optional, LZ4)
-              │
-              ▼ AES-256-GCM Encrypt
-              │
+             │
+             ▼ compress (optional, LZ4)
+             │
+             ▼ AES-256-GCM Encrypt
+             │
 Wire format: [PacketID][Nonce][Ciphertext][Auth Tag]
-               4 bytes  12 bytes   var       16 bytes
+             4 bytes  12 bytes   var       16 bytes
 ```
 
 ---
 
-## Planned Enhancements
+## Platform Support Matrix
 
-The authoritative, per-feature status is maintained in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) (canonical source of truth), with a summary in the [Implementation Status](#implementation-status) table above. Genuinely remaining planned work:
+| Platform | TUN | Routing / NAT | Privilege drop | Status |
+|---|---|---|---|---|
+| Linux | ✅ Full (`/dev/net/tun`) | ✅ `ip` + `iptables` | ✅ (`--user`, partial) | Primary / supported |
+| Windows | ⚠️ Partial (`tun_windows.py`) | ❌ Not implemented | ❌ Not implemented | Experimental, TUN only |
+| macOS / BSD | ❌ Not implemented | ❌ Not implemented | ❌ Not implemented | Unsupported |
 
-- **Certificate generation scripts**: `certs/generate.sh` using openssl
-- **Integration CI**: Privileged system tests (root + TUN) automated via GitHub Actions
-- **Windows support**: Full TUN driver integration
+## Runtime Profile Matrix
+
+| Profile | Supported | Notes |
+|---|---|---|
+| UDP + custom ECDH control + cert verify | ✅ Default | the standard, supported runtime |
+| TCP + custom ECDH control + cert verify | ✅ Supported | set `proto tcp` |
+| Dev mode (no certificates) | ✅ Supported | no peer authentication |
+| Compression (`--comp-lzo`) | ✅ Supported | opt-in; both sides must agree |
+| Fragmentation | ✅ Automatic | triggered for > 1400 B payloads |
+| Multi-client | ✅ Supported | server mode with IP pool |
+| TLS 1.3 control channel | 🧪 Experimental | module only; not the default control path |
+| Privilege separation | ⚠️ Partial | opt-in `--user`; per-client routes/NAT still need root |
 
 ---
 
-## Security Considerations
+## Threat Model and Non-Goals
 
-| Concern | Current Status |
-|---|---|
-| Forward secrecy (PFS) | ✅ X25519 ECDH + ephemeral keys |
-| Data encryption | ✅ AES-256-GCM |
-| Certificate validation | ✅ Chain verification, signature checks |
-| Auth tag verification | ✅ AES-GCM tag validation |
-| Key derivation | ✅ HKDF with salt |
-| TLS 1.3 control channel | ✅ Implemented (module) — mutual TLS 1.3 over TCP in `src/protocol/tls_channel.py` (with `tests/test_tls_channel.py`). Not yet wired as the default server/client control path; the running VPN still uses the custom X25519 ECDH handshake from `src/protocol/control.py`. |
-| Replay attack mitigation | ✅ Implemented — sliding-window PacketID dedup (`src/protocol/replay.py`, checked in `DataChannel.decrypt`) |
-| DoS protection on handshake | ❌ Planned |
-| Privilege separation | ⚠️ Partial — drops to `--user` after setup; per-client routes/NAT still require privileges |
-| Memory secret locking | ❌ Planned |
+This section is the formal security frame. It intentionally lists what is **not**
+covered, because the project is educational.
+
+**Covered (implemented & tested — see `docs/SECURITY_MODEL`):**
+
+- Passive eavesdropping → AES-256-GCM encryption.
+- Man-in-the-middle → X.509 certificate verification + handshake signatures.
+- Forward secrecy → ephemeral X25519 ECDH keys.
+- Replay attacks → sliding-window PacketID dedup on the data channel.
+- Key/material leakage in transit → authenticated encryption (GCM tag).
+
+**Not covered (Planned / Non-Goals):**
+
+- **No full hardening.** The process runs with root for most of its life; privilege
+  separation (`--user`) is partial — per-client route installation and NAT still require
+  root, so a compromised process retains significant privileges.
+- **Replay mitigation is data-channel only.** The control handshake has no replay/DoS
+  protection; an attacker can trigger repeated handshakes.
+- **No key rotation.** A session key is fixed for the session lifetime; there is no
+  renegotiation.
+- **Dev mode is insecure by design.** Omitting certificates removes all authentication.
+- **Windows support is incomplete** (TUN only, no routing/NAT/privilege drop).
+- **CI/integration validation is incomplete.** Unit and integration tests run without
+  root; privileged system tests are not yet automated.
+- **Memory secrets are not locked** (`mlock` not used) — key material may reach swap.
+
+**Non-Goals:** production deployment, audited cryptographic design, compliance
+certifications, and support for untrusted/multi-tenant environments.
+
+---
+
+## Project Structure
+
+```
+vpn-app/
+├── README.md
+├── requirements.txt
+├── setup.py
+├── examples/
+│   ├── server.conf
+│   └── client.conf
+├── src/
+│   ├── __init__.py
+│   ├── app.py                      # Entry point
+│   ├── cli.py                      # CLI argument parsing
+│   ├── config.py                   # Config file parser
+│   ├── tun.py                      # TUN interface (Linux)
+│   ├── tun_windows.py              # TUN interface (Windows, partial)
+│   ├── server.py                   # VPN server
+│   ├── client.py                   # VPN client
+│   ├── routing.py                  # Routing & iptables
+│   ├── status.py                   # Status file output
+│   ├── privileges.py               # Opt-in privilege drop
+│   ├── crypto/
+│   │   ├── cipher.py               # AES-256-GCM
+│   │   ├── certificates.py         # Load/verify certs
+│   │   └── key_exchange.py         # X25519 + HKDF
+│   ├── protocol/
+│   │   ├── control.py              # Control channel (ECDH handshake)
+│   │   ├── data.py                 # Data channel (encrypted tunnel)
+│   │   ├── replay.py               # Replay protection (dedup window)
+│   │   ├── tls_channel.py          # Experimental TLS 1.3 control channel
+│   │   ├── packet.py               # Binary packet format
+│   │   ├── framing.py              # TCP frame length prefixing
+│   │   └── messages.py             # Opcodes and message types
+│   └── auth/
+│       └── __init__.py
+└── tests/
+    ├── test_handshake.py
+    ├── test_crypto.py
+    ├── test_data.py
+    ├── test_replay.py
+    ├── test_tls_channel.py
+    ├── test_privileges.py
+    └── ...
+```
 
 ---
 
