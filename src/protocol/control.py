@@ -17,6 +17,7 @@ from crypto.key_exchange import (
     public_key_from_bytes,
     public_key_to_bytes,
 )
+
 from .messages import HANDSHAKE_TIMEOUT, MessageType, Opcode
 from .packet import decode_packet, encode_handshake_message, encode_packet
 

@@ -3,6 +3,7 @@ import struct
 import time
 
 from crypto.cipher import Cipher
+
 from .messages import Opcode
 from .packet import decode_packet, encode_packet
 
