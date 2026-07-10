@@ -1,6 +1,6 @@
 import ipaddress
-import threading
 import logging
+import threading
 
 logger = logging.getLogger("pyvpn.routing")
 
@@ -79,7 +79,6 @@ def setup_nat(interface: str, tun_network: str) -> None:
 
 
 def enable_ip_forward() -> None:
-    import subprocess
     logger.info("Enabling IP forwarding")
     for proc in ("/proc/sys/net/ipv4/ip_forward",
                  "/proc/sys/net/ipv6/conf/all/forwarding"):

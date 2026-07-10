@@ -1,14 +1,20 @@
 import pytest
+from cryptography.hazmat.primitives import serialization
+
+from src.crypto.certificates import (
+    get_cert_common_name,
+    get_cert_fingerprint,
+    load_certificate,
+    load_private_key,
+    verify_certificate,
+)
 from src.crypto.cipher import Cipher
 from src.crypto.key_exchange import (
-    generate_ephemeral_keypair, public_key_to_bytes,
-    public_key_from_bytes, derive_shared_key,
+    derive_shared_key,
+    generate_ephemeral_keypair,
+    public_key_from_bytes,
+    public_key_to_bytes,
 )
-from src.crypto.certificates import (
-    load_certificate, load_private_key, verify_certificate,
-    get_cert_common_name, get_cert_fingerprint,
-)
-from cryptography.hazmat.primitives import serialization
 
 
 class TestCipher:

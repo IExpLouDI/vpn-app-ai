@@ -33,7 +33,6 @@ class StatusFile:
         self._write(server_ip, virtual_ip, state)
 
     def _write(self, server_ip: str, virtual_ip: str | None, state: str) -> None:
-        uptime = int(time.time() - self._start_time)
         lines = [
             "OpenVPN CLIENT LIST",
             f"Updated,{time.strftime('%a %b %d %H:%M:%S %Y')}",
@@ -42,7 +41,7 @@ class StatusFile:
             "ROUTING TABLE",
             f"{virtual_ip or 'N/A'},{server_ip},",
             "GLOBAL STATS",
-            f"Max bcast/mcast queue length,0",
+            "Max bcast/mcast queue length,0",
             "END",
         ]
         try:

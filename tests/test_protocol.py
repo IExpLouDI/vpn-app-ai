@@ -1,8 +1,15 @@
-import pytest
 import struct
-from src.protocol.messages import Opcode, MessageType
-from src.protocol.packet import encode_packet, decode_packet, encode_ack, encode_handshake_message
+
+import pytest
+
 from src.protocol.framing import frame_packet
+from src.protocol.messages import MessageType, Opcode
+from src.protocol.packet import (
+    decode_packet,
+    encode_ack,
+    encode_handshake_message,
+    encode_packet,
+)
 
 
 class TestPacket:

@@ -1,9 +1,8 @@
-import sys
 import asyncio
 import logging
 
-from .config import Config
 from .cli import parse_args
+from .config import Config
 
 logger = logging.getLogger("pyvpn")
 

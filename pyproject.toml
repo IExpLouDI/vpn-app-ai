@@ -6,6 +6,7 @@ norecursedirs = ["tests/legacy"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+exclude = ["tests/legacy"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

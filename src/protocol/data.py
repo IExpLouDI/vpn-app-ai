@@ -1,10 +1,10 @@
-import struct
 import logging
+import struct
 import time
 
-from .messages import Opcode
-from .packet import encode_packet, decode_packet
 from ..crypto.cipher import Cipher
+from .messages import Opcode
+from .packet import decode_packet, encode_packet
 
 logger = logging.getLogger("pyvpn.protocol.data")
 

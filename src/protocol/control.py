@@ -1,22 +1,24 @@
 import enum
+import logging
 import os
 import struct
-import logging
 import time
 
-from cryptography.x509 import Certificate, load_pem_x509_certificate
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, rsa, padding
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec, rsa, padding
+from cryptography.x509 import Certificate, load_pem_x509_certificate
 
 from ..crypto.certificates import load_certificate, load_private_key, verify_certificate
-from ..crypto.key_exchange import (
-    generate_ephemeral_keypair, public_key_from_bytes,
-    public_key_to_bytes, derive_shared_key,
-)
 from ..crypto.cipher import Cipher
-from .messages import Opcode, MessageType, HANDSHAKE_TIMEOUT
-from .packet import encode_packet, encode_handshake_message, decode_packet
+from ..crypto.key_exchange import (
+    derive_shared_key,
+    generate_ephemeral_keypair,
+    public_key_from_bytes,
+    public_key_to_bytes,
+)
+from .messages import HANDSHAKE_TIMEOUT, MessageType, Opcode
+from .packet import decode_packet, encode_handshake_message, encode_packet
 
 logger = logging.getLogger("pyvpn.protocol.control")
 

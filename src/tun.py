@@ -1,7 +1,7 @@
 import os
+import platform
 import struct
 import subprocess
-import platform
 
 system = platform.system().lower()
 
@@ -64,8 +64,7 @@ else:
             return os.write(self.fd, packet)
 
         def set_ip(self, cidr: str) -> None:
-            ip, prefix = cidr.split("/")
-            mask = prefixlen_to_netmask(int(prefix))
+            ip, _ = cidr.split("/")
 
             subprocess.run(
                 ["ip", "addr", "add", cidr, "dev", self.name],

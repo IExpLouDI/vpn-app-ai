@@ -1,21 +1,23 @@
 import asyncio
+import ipaddress
 import logging
 import signal
-import time
-import ipaddress
 import struct
+import time
 
 from .config import Config
-from .tun import TunInterface
-from .protocol.messages import Opcode, MessageType
-from .protocol.packet import decode_packet
 from .protocol.control import (
-    Session, server_handle_reset, server_handle_client_hello,
+    Session,
     server_handle_client_finished,
+    server_handle_client_hello,
+    server_handle_reset,
 )
 from .protocol.data import DataChannel
 from .protocol.framing import frame_packet, read_frame
-from .routing import IpPool, setup_nat, enable_ip_forward, add_route, delete_route
+from .protocol.messages import MessageType, Opcode
+from .protocol.packet import decode_packet
+from .routing import IpPool, add_route, delete_route, enable_ip_forward
+from .tun import TunInterface
 
 logger = logging.getLogger("pyvpn.server")
 
@@ -255,7 +257,7 @@ class VpnServer:
         addr = writer.get_extra_info("peername")
         logger.info("TCP client connected: %s", addr)
 
-        cs = self._get_or_create_session(addr, writer)
+        self._get_or_create_session(addr, writer)
 
         try:
             while self._running:

@@ -1,4 +1,5 @@
 import struct
+
 from .messages import Opcode
 
 

@@ -1,11 +1,16 @@
 import pytest
+
 from src.protocol.control import (
-    Session, client_start_handshake, client_handle_reset_ack,
-    client_handle_server_hello, server_handle_reset,
-    server_handle_client_hello, server_handle_client_finished,
+    Session,
+    client_handle_reset_ack,
+    client_handle_server_hello,
+    client_start_handshake,
+    server_handle_client_finished,
+    server_handle_client_hello,
+    server_handle_reset,
 )
-from src.protocol.packet import decode_packet
 from src.protocol.data import DataChannel
+from src.protocol.packet import decode_packet
 
 
 class TestHandshake:

@@ -98,9 +98,9 @@ def _parse_config(path: str) -> Config:
 
 def _set_value(kwargs: dict, key: str, value: str) -> None:
     field_type = Config.__dataclass_fields__[key].type
-    if field_type == int:
+    if field_type is int:
         kwargs[key] = int(value)
-    elif field_type == bool:
+    elif field_type is bool:
         kwargs[key] = value.lower() in ("yes", "true", "1")
     else:
         kwargs[key] = value

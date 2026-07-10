@@ -4,11 +4,10 @@ Requires wintun.dll in PATH or current directory.
 Download from: https://www.wintun.net/
 """
 import ctypes
-import logging
 import ctypes.util
+import logging
 import os
 import platform
-import struct
 import subprocess
 import threading
 

@@ -1,16 +1,16 @@
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import datetime
+
 import pytest
 from cryptography import x509
-from cryptography.x509.oid import NameOID
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa, ec
 from cryptography.hazmat.backends import default_backend
-import datetime
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 
 def _make_self_signed_cert(key, subject_name: str) -> x509.Certificate:

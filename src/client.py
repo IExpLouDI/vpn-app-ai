@@ -6,16 +6,18 @@ import subprocess
 import time
 
 from .config import Config
-from .tun import TunInterface
-from .protocol.messages import Opcode, MessageType
-from .protocol.packet import decode_packet, encode_packet
 from .protocol.control import (
-    Session, client_start_handshake, client_handle_reset_ack,
+    Session,
+    client_handle_reset_ack,
     client_handle_server_hello,
+    client_start_handshake,
 )
 from .protocol.data import DataChannel
 from .protocol.framing import frame_packet, read_frame
+from .protocol.messages import MessageType, Opcode
+from .protocol.packet import decode_packet, encode_packet
 from .status import StatusFile
+from .tun import TunInterface
 
 logger = logging.getLogger("pyvpn.client")
 
