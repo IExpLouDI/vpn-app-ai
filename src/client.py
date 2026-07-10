@@ -5,19 +5,19 @@ import struct
 import subprocess
 import time
 
-from .config import Config
-from .protocol.control import (
+from config import Config
+from protocol.control import (
     Session,
     client_handle_reset_ack,
     client_handle_server_hello,
     client_start_handshake,
 )
-from .protocol.data import DataChannel
-from .protocol.framing import frame_packet, read_frame
-from .protocol.messages import MessageType, Opcode
-from .protocol.packet import decode_packet, encode_packet
-from .status import StatusFile
-from .tun import TunInterface
+from protocol.data import DataChannel
+from protocol.framing import frame_packet, read_frame
+from protocol.messages import MessageType, Opcode
+from protocol.packet import decode_packet, encode_packet
+from status import StatusFile
+from tun import TunInterface
 
 logger = logging.getLogger("pyvpn.client")
 
@@ -58,29 +58,33 @@ class VpnClient:
             logger.error("No remote address specified")
             return
 
-        while self._running or not self._connected:
-            self._running = True
-            self._handshake_done = False
-            self._assigned_ip = None
-            self.data = None
-            self.session = Session(is_server=False)
-            if self.config.ca and self.config.cert and self.config.key:
-                self.session.configure(self.config.ca, self.config.cert, self.config.key)
+        try:
+            while self._running or not self._connected:
+                self._running = True
+                self._handshake_done = False
+                self._assigned_ip = None
+                self.data = None
+                self.session = Session(is_server=False)
+                if self.config.ca and self.config.cert and self.config.key:
+                    self.session.configure(self.config.ca, self.config.cert, self.config.key)
 
-            if self.tun is None:
-                self.tun = TunInterface(self.config.dev)
-                self.tun.open()
-                self.tun.set_mtu(1500)
+                if self.tun is None:
+                    self.tun = TunInterface(self.config.dev)
+                    self.tun.open()
+                    self.tun.set_mtu(1500)
 
-            await self._connect()
+                await self._connect()
 
-            if not self._running:
-                break
-            if self._connected:
-                return
+                if not self._running:
+                    break
+                if self._connected:
+                    return
 
-            logger.info("Retrying in 5 seconds...")
-            await asyncio.sleep(5)
+                logger.info("Retrying in 5 seconds...")
+                await asyncio.sleep(5)
+        finally:
+            if self.tun:
+                self.tun.close()
 
     async def _connect(self) -> None:
         logger.info("Connecting to %s:%d (%s)",
@@ -117,7 +121,7 @@ class VpnClient:
 
         packets = client_start_handshake(self.session)
         for p in packets:
-            self._send(p)
+            await self._send(p)
         logger.info("Sent HARD_RESET_CLIENT")
 
         try:
@@ -167,11 +171,16 @@ class VpnClient:
             if self._status:
                 self._status.close()
 
-    def _send(self, data: bytes) -> None:
+    def _sync_send(self, data: bytes) -> None:
         if self._is_tcp and self.tcp_writer:
             self.tcp_writer.write(frame_packet(data))
         elif self.transport:
             self.transport.sendto(data)
+
+    async def _send(self, data: bytes) -> None:
+        self._sync_send(data)
+        if self._is_tcp and self.tcp_writer:
+            await self.tcp_writer.drain()
 
     async def _tcp_read_loop(self) -> None:
         try:
@@ -191,7 +200,7 @@ class VpnClient:
 
     def _cleanup(self) -> None:
         for cmd in reversed(self._routes_added):
-            del_cmd = ["ip", "route", "delete"] + cmd[2:]
+            del_cmd = ["ip", "route", "delete"] + cmd[3:]
             subprocess.run(del_cmd, capture_output=True)
         self._routes_added.clear()
 
@@ -205,7 +214,7 @@ class VpnClient:
         if not packet:
             return
         for wire in self.data.encrypt(packet):
-            self._send(wire)
+            self._sync_send(wire)
             if self._status:
                 self._status.record_out(len(wire))
 
@@ -219,11 +228,17 @@ class VpnClient:
                 self._assigned_ip, "CONNECTED", force=True,
             )
 
-        cidr = f"{ip_str}/24"
+        if "/" in ip_str:
+            cidr = ip_str
+        else:
+            prefix = self.config.ifconfig.split("/")[1] if self.config.ifconfig and "/" in self.config.ifconfig else "24"
+            cidr = f"{ip_str}/{prefix}"
         self.tun.set_ip(cidr)
 
-        server_ip = "10.8.0.1"
-        route_cmd = ["ip", "route", "add", "10.8.0.0/24", "dev", self.config.dev]
+        server_net = self.config.ifconfig.split("/")[0] if self.config.ifconfig else "10.8.0.0"
+        server_ip_parts = server_net.rsplit(".", 1)
+        server_ip = f"{server_ip_parts[0]}.1"
+        route_cmd = ["ip", "route", "add", f"{server_ip_parts[0]}.0/24", "dev", self.config.dev]
         subprocess.run(route_cmd, capture_output=True)
         self._routes_added.append(route_cmd)
 
@@ -250,7 +265,7 @@ class VpnClient:
         if opcode_val == Opcode.HARD_RESET_SERVER:
             packets = client_handle_reset_ack(self.session, data)
             for p in packets:
-                self._send(p)
+                self._sync_send(p)
             return
 
         if opcode_val == Opcode.CONTROL:
@@ -267,14 +282,14 @@ class VpnClient:
             if msg_type == MessageType.SERVER_HELLO:
                 packets = client_handle_server_hello(self.session, inner)
                 for p in packets:
-                    self._send(p)
+                    self._sync_send(p)
             elif msg_type == MessageType.IP_ASSIGN:
                 ip_str = inner.decode("utf-8")
                 self._handle_ip_assign(ip_str)
             elif msg_type == MessageType.KEEPALIVE:
                 sid = int.from_bytes(self.session.session_id, "big")
                 resp = encode_packet(Opcode.CONTROL, sid, struct.pack("!B", MessageType.KEEPALIVE))
-                self._send(resp)
+                self._sync_send(resp)
 
             return
 

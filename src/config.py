@@ -84,7 +84,10 @@ def _parse_config(path: str) -> Config:
                 for a, v in zip(attr, args):
                     _set_value(kwargs, a, v)
             elif directive in ("comp-lzo", "redirect-gateway"):
-                kwargs[attr] = True
+                if args:
+                    _set_value(kwargs, attr, args[0])
+                else:
+                    kwargs[attr] = True
             elif directive in NETMASK_DIRECTIVES and len(args) == 2:
                 prefix = _netmask_to_cidr(args[1])
                 kwargs[attr] = f"{args[0]}/{prefix}"

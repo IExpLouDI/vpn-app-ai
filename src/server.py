@@ -5,19 +5,19 @@ import signal
 import struct
 import time
 
-from .config import Config
-from .protocol.control import (
+from config import Config
+from protocol.control import (
     Session,
     server_handle_client_finished,
     server_handle_client_hello,
     server_handle_reset,
 )
-from .protocol.data import DataChannel
-from .protocol.framing import frame_packet, read_frame
-from .protocol.messages import MessageType, Opcode
-from .protocol.packet import decode_packet
-from .routing import IpPool, add_route, delete_route, enable_ip_forward
-from .tun import TunInterface
+from protocol.data import DataChannel
+from protocol.framing import frame_packet, read_frame
+from protocol.messages import MessageType, Opcode
+from protocol.packet import decode_packet
+from routing import IpPool, add_route, delete_route, enable_ip_forward
+from tun import TunInterface
 
 logger = logging.getLogger("pyvpn.server")
 
@@ -126,7 +126,7 @@ class VpnServer:
         try:
             while self._running:
                 self._cleanup_stale()
-                self._send_keepalives()
+                await self._send_keepalives()
                 for cs in self.clients.values():
                     if cs.data:
                         cs.data.cleanup_fragments()
@@ -159,13 +159,18 @@ class VpnServer:
         if cs.writer and not cs.writer.is_closing():
             cs.writer.close()
 
-    def _send_to(self, cs: ClientSession, data: bytes) -> None:
+    def _sync_send_to(self, cs: ClientSession, data: bytes) -> None:
         if self._is_tcp and cs.writer:
             cs.writer.write(frame_packet(data))
         elif self.transport:
             self.transport.sendto(data, cs.addr)
 
-    def _send_keepalives(self) -> None:
+    async def _send_to(self, cs: ClientSession, data: bytes) -> None:
+        self._sync_send_to(cs, data)
+        if self._is_tcp and cs.writer:
+            await cs.writer.drain()
+
+    async def _send_keepalives(self) -> None:
         now = time.time()
         interval = self.config.keepalive_interval
         for addr, cs in list(self.clients.items()):
@@ -173,7 +178,7 @@ class VpnServer:
                 sid = int.from_bytes(cs.session.session_id, "big")
                 payload = struct.pack("!B", MessageType.KEEPALIVE)
                 packet = struct.pack("!B Q", Opcode.CONTROL, sid) + payload
-                self._send_to(cs, packet)
+                await self._send_to(cs, packet)
                 cs.last_keepalive = now
 
     def _cleanup_stale(self) -> None:
@@ -247,7 +252,7 @@ class VpnServer:
             sid = int.from_bytes(cs.session.session_id, "big")
             ip_payload = struct.pack("!B", MessageType.IP_ASSIGN) + ip.encode("utf-8")
             packet = struct.pack("!B Q", Opcode.CONTROL, sid) + ip_payload
-            self._send_to(cs, packet)
+            self._sync_send_to(cs, packet)
 
             add_route(ip, dev=self.config.dev)
 
@@ -280,7 +285,7 @@ class VpnServer:
             cs = self._get_or_create_session(addr)
             packets = server_handle_reset(cs.session, data)
             for p in packets:
-                self._send_to(cs, p)
+                self._sync_send_to(cs, p)
             return
 
         if opcode_val == Opcode.HARD_RESET_SERVER:
@@ -308,7 +313,7 @@ class VpnServer:
                 handler = CONTROL_HANDLERS[msg_type]
                 packets = handler(cs.session, inner)
                 for p in packets:
-                    self._send_to(cs, p)
+                    self._sync_send_to(cs, p)
 
                 if cs.session.is_established and cs.data is None:
                     cs.data = DataChannel(

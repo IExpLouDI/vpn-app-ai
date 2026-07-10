@@ -35,9 +35,14 @@ else:
 
             self._delete_existing_interface()
 
-            flags = IFF_TUN | IFF_NO_PI
-            ifr = struct.pack("16sH", self.name.encode("utf-8"), flags)
-            fcntl.ioctl(self.fd, TUNSETIFF, ifr, True)
+            try:
+                flags = IFF_TUN | IFF_NO_PI
+                ifr = struct.pack("16sH", self.name.encode("utf-8"), flags)
+                fcntl.ioctl(self.fd, TUNSETIFF, ifr, True)
+            except OSError:
+                os.close(self.fd)
+                self.fd = None
+                raise
 
         def _delete_existing_interface(self) -> None:
             try:
@@ -52,6 +57,7 @@ else:
             if self.fd is not None:
                 os.close(self.fd)
                 self.fd = None
+            self._delete_existing_interface()
 
         def read(self, size: int = 65536) -> bytes:
             if self.fd is None:

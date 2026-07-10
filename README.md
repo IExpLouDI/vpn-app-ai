@@ -8,6 +8,91 @@ A minimal educational VPN prototype inspired by OpenVPN concepts. Creates a secu
 
 ---
 
+## Quick Start
+
+### Prerequisites
+
+- Linux with TUN support (`/dev/net/tun`)
+- Python 3.10+
+- `iproute2` (provides `ip` command)
+- Root privileges (for TUN device and iptables)
+
+### 1. Install
+
+```bash
+git clone https://github.com/IExpLouDI/vpn-app-ai.git
+cd vpn-app-ai
+pip install .
+```
+
+### 2. Generate certificates (optional)
+
+Without certificates the handshake still works (no authentication). For production-like setup:
+
+```bash
+# CA
+openssl req -x509 -newkey rsa:2048 -days 365 -nodes \
+  -keyout ca.key -out ca.crt -subj "/CN=VPN-CA"
+
+# Server
+openssl req -newkey rsa:2048 -nodes \
+  -keyout server.key -out server.csr -subj "/CN=server"
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out server.crt -days 365
+
+# Client
+openssl req -newkey rsa:2048 -nodes \
+  -keyout client.key -out client.csr -subj "/CN=client"
+openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out client.crt -days 365
+```
+
+### 3. Start the server
+
+```bash
+# With certificates (authenticated mode):
+sudo pyvpn --server 10.8.0.0/24 --ca ca.crt --cert server.crt --key server.key
+
+# Without certificates (dev mode):
+sudo pyvpn --server 10.8.0.0/24
+```
+
+### 4. Connect a client
+
+```bash
+sudo pyvpn --remote SERVER_IP --ca ca.crt --cert client.crt --key client.key
+```
+
+Replace `SERVER_IP` with the server's actual IP address.
+
+### 5. Using a config file (OpenVPN-style)
+
+```bash
+sudo pyvpn -c examples/server.conf
+sudo pyvpn -c examples/client.conf
+```
+
+### Running without sudo (alternative)
+
+If `sudo` doesn't preserve `PATH`, use a wrapper script:
+
+```bash
+cat > /usr/local/bin/pyvpn-sudo.sh << 'SCRIPT'
+#!/bin/sh
+PYTHONPATH=/path/to/vpn-app-ai/src exec /usr/bin/python3 -m app "$@"
+SCRIPT
+chmod +x /usr/local/bin/pyvpn-sudo.sh
+sudo /usr/local/bin/pyvpn-sudo.sh --server 10.8.0.0/24
+```
+
+### Dev mode (no certificate authentication)
+
+Omit `--ca`, `--cert`, and `--key` to skip certificate authentication. The
+handshake and encryption still use X25519 + AES-256-GCM, but neither side
+is verified. Useful for local testing.
+
+---
+
 ## Implementation Status
 
 | Component | Status | Files |

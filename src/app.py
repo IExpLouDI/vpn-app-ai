@@ -1,8 +1,8 @@
 import asyncio
 import logging
 
-from .cli import parse_args
-from .config import Config
+from cli import parse_args
+from config import Config
 
 logger = logging.getLogger("pyvpn")
 
@@ -21,13 +21,13 @@ def setup_logging(verb: int) -> None:
 
 
 async def run_server(cfg: Config) -> None:
-    from .server import VpnServer
+    from server import VpnServer
     server = VpnServer(cfg)
     await server.run()
 
 
 async def run_client(cfg: Config) -> None:
-    from .client import VpnClient
+    from client import VpnClient
     client = VpnClient(cfg)
     await client.run()
 
