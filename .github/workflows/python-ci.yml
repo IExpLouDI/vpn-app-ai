@@ -26,6 +26,7 @@ jobs:
         run: |
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pytest ruff
+          pip install -e .
 
       - name: Lint
         run: ruff check .
@@ -35,5 +36,4 @@ jobs:
 
       - name: Packaging smoke test
         run: |
-          pip install .
           python -c "from src.app import main; print('Package import OK')"
