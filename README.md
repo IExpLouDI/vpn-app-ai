@@ -1,10 +1,36 @@
-# Python VPN Application — Architecture & Development Plan
+# Python VPN Application — Current State
 
 ## Overview
 
-A minimal but functional VPN educational VPN prototype inspired by OpenVPN concepts. The application creates a secure tunnel between a client and server, forwarding IP packets through an encrypted UDP connection.
+A minimal educational VPN prototype inspired by OpenVPN concepts. Creates a secure tunnel between a client and server, forwarding IP packets through an encrypted UDP/TCP connection.
 
-> **Note:** This is an educational project. It implements core OpenVPN concepts (TUN interface, control/data channel separation, TLS authentication, AES-GCM encryption) but is not intended for production use.
+> **Note:** This is an educational project. It is **not** intended for production use.
+
+---
+
+## Implementation Status
+
+| Component | Status | Files |
+|---|---|---|
+| TUN interface | ✅ Implemented | `src/tun.py` |
+| UDP/TCP transport | ✅ Implemented | `src/client.py`, `src/server.py` |
+| Custom ECDH handshake (X25519 + HKDF) | ✅ Implemented | `src/protocol/control.py`, `src/crypto/key_exchange.py` |
+| Certificate loading & verification | ✅ Implemented | `src/crypto/certificates.py` |
+| AES-256-GCM data encryption | ✅ Implemented | `src/crypto/cipher.py`, `src/protocol/data.py` |
+| Packet fragmentation/reassembly | ✅ Implemented | `src/protocol/data.py` |
+| LZ4 compression | ✅ Implemented | `src/protocol/data.py` |
+| Config parser (OpenVPN-style) | ✅ Implemented | `src/config.py` |
+| Multi-client server | ✅ Implemented | `src/server.py` |
+| Virtual IP pool | ✅ Implemented | `src/routing.py` |
+| NAT / iptables MASQUERADE | ✅ Implemented | `src/routing.py` |
+| Keep-alive & timeout | ✅ Implemented | `src/client.py`, `src/server.py` |
+| Auto-reconnect | ✅ Implemented | `src/client.py` |
+| Windows TUN support | ⚠️ Partial | `src/tun_windows.py` |
+| TLS 1.3 control channel | ❌ Planned (not implemented) | — |
+| Replay protection (dedup window) | ❌ Planned (not implemented) | — |
+| Privilege separation | ❌ Planned (not implemented) | — |
+| Certificate generation scripts | ❌ Planned (not implemented) | — |
+| Integration CI | ❌ Planned (not implemented) | — |
 
 ---
 
@@ -15,27 +41,27 @@ A minimal but functional VPN educational VPN prototype inspired by OpenVPN conce
 │                    VPN Client                        │
 │  ┌──────────┐  ┌──────────┐  ┌───────────────────┐  │
 │  │ TUN/TAP  │  │  Packet  │  │  Control Channel  │  │
-│  │ Interface│◄─┤  Router  │◄─┤  (TLS + Auth)     │  │
+│  │ Interface│◄─┤  Router  │◄─┤  (ECDH + Sign)   │  │
 │  │  (dev)   │  │          │  │                   │  │
 │  └────▲─────┘  └────▲─────┘  └────────▲──────────┘  │
 │       │              │                 │             │
 │  ┌────┴──────────────┴─────────────────┴──────────┐  │
-│  │           Data Channel (AES-GCM)                │  │
-│  │           UDP Transport                         │  │
+│  │           Data Channel (AES-256-GCM)            │  │
+│  │           UDP/TCP Transport                     │  │
 │  └───────────────────▲────────────────────────────┘  │
-│                      │ UDP (encrypted packets)       │
+│                      │ encrypted packets             │
 ├──────────────────────┼──────────────────────────────┤
-│                 Internet 🔒                          │
+│                 Internet                             │
 ├──────────────────────┼──────────────────────────────┤
 │                      ▼                              │
 │  ┌───────────────────┴────────────────────────────┐  │
-│  │           Data Channel (AES-GCM)                │  │
-│  │           UDP Transport                         │  │
+│  │           Data Channel (AES-256-GCM)            │  │
+│  │           UDP/TCP Transport                     │  │
 │  └───────────────────▲────────────────────────────┘  │
 │       │              │                 │             │
 │  ┌────▼──────────────┴─────────────────▼──────────┐  │
 │  │ TUN/TAP  │  Packet  │  Control Channel  │  Auth  │  │
-│  │ Interface│  Router  │  (TLS + Cert)     │  PEM   │  │
+│  │ Interface│  Router  │  (ECDH + Sign)     │  PEM   │  │
 │  └──────────┘  └──────────┘  └───────────────────┘  │
 │                    VPN Server                        │
 └─────────────────────────────────────────────────────┘
@@ -43,10 +69,10 @@ A minimal but functional VPN educational VPN prototype inspired by OpenVPN conce
 
 ### Two-Channel Design (OpenVPN-inspired)
 
-| Channel        | Purpose                               | Protocol         | Encryption              |
-|----------------|---------------------------------------|------------------|-------------------------|
-| Control Channel | Handshake, auth, key exchange         | TLS 1.3 over UDP | X.509 certificates      |
-| Data Channel    | IP packet tunneling                   | AES-256-GCM      | Symmetric session keys  |
+| Channel | Purpose | Protocol | Encryption |
+|---|---|---|---|
+| Control Channel | Handshake, auth, key exchange | Custom ECDH (X25519) + certificate signing | X.509 certificates |
+| Data Channel | IP packet tunneling | AES-256-GCM | Symmetric session keys (HKDF-derived) |
 
 Both channels are multiplexed over a single UDP connection using a lightweight frame header.
 
@@ -61,34 +87,26 @@ Creates and manages the virtual TUN network interface.
 - Opens `/dev/net/tun` via `open()` + `fcntl.ioctl(TUNSETIFF)`
 - Reads raw IP packets from the interface
 - Writes decrypted IP packets into the interface
-- Configures IP address and MTU via `ioctl(SIOCSIFADDR)` or subprocess calls to `ip`
+- Configures IP address and MTU via subprocess calls to `ip`
 - Handles interface lifecycle (create, configure, destroy)
-
-**Interface:** `TunInterface(dev_name="tun0")` — context manager
-
-```python
-with TunInterface("tun0") as tun:
-    tun.set_ip("10.8.0.2/24")
-    tun.set_mtu(1500)
-    packet = tun.read()     # blocks until packet arrives
-    tun.write(packet)
-```
 
 ### 2. Control Channel — `protocol/control.py`
 
-Manages the secure control channel — handshake, authentication, key exchange, keep-alive.
+Manages the handshake, authentication, and key exchange.
 
-**Handshake sequence (simplified):**
-1. Client sends `P_CONTROL_HARD_RESET_CLIENT_V2`
-2. Server responds `P_CONTROL_HARD_RESET_SERVER_V2`
-3. TLS handshake begins (Client Hello → Server Hello → Certificates → Finished)
-4. Mutual certificate verification (mTLS)
-5. Session key derivation from TLS keying material (via `export_keying_material`)
-6. Periodic `P_CONTROL_KEEPALIVE` to maintain session
+**Handshake sequence:**
+
+1. Client sends `HARD_RESET_CLIENT`
+2. Server responds `HARD_RESET_SERVER`
+3. Client sends `CLIENT_HELLO` (certificate + ephemeral X25519 public key)
+4. Server verifies client cert, derives shared key via X25519 + HKDF, responds with `SERVER_HELLO` (cert + pubkey + signature)
+5. Client verifies server cert + signature, derives shared key, sends `CLIENT_FINISHED` (signature)
+6. Server verifies client signature → session established
+7. Periodic `KEEPALIVE` to maintain session
 
 **Packet format:**
 ```
-[Opcode (1)] [KeyID (1)] [SessionID (8)] [Payload]
+[Opcode (1)] [SessionID (8)] [Payload]
 ```
 
 ### 3. Data Channel — `protocol/data.py`
@@ -99,33 +117,23 @@ Encrypts and tunnels IP packets.
 - Compresses payload (optional, LZ4)
 - Encrypts with AES-256-GCM using session key
 - Wraps in data frame header
-- Sends over UDP to peer
+- Sends over UDP/TCP to peer
 - Peer decrypts → decompresses → writes to its TUN interface
 
 **Data frame format:**
 ```
-[SessionID (4)] [PacketID (4)] [Nonce (12)] [Ciphertext...] [Tag (16)]
+[PacketID (4)] [Nonce (12)] [Ciphertext...] [Tag (16)]
 ```
 
 ### 4. Crypto Module — `crypto/`
 
-| File               | Responsibility                                      |
-|--------------------|-----------------------------------------------------|
-| `tls.py`           | TLS wrapper — wraps `ssl.SSLContext` for mTLS       |
-| `cipher.py`        | AES-256-GCM encrypt/decrypt, key import             |
-| `certificates.py`  | Load/generate X.509 certs, verify chain             |
-| `key_exchange.py`  | ECDH (X25519) for PFS, key derivation (HKDF)        |
+| File | Responsibility |
+|---|---|
+| `cipher.py` | AES-256-GCM encrypt/decrypt, key import |
+| `certificates.py` | Load/verify X.509 PEM certificates |
+| `key_exchange.py` | X25519 ECDH for PFS, key derivation (HKDF) |
 
-### 5. Authentication — `auth/cert_auth.py`
-
-Mutual TLS (mTLS) certificate verification.
-
-- Server verifies client certificate is signed by trusted CA
-- Client verifies server certificate is signed by trusted CA
-- Optional: username/password authentication on top of mTLS
-- Certificate revocation checking (optional)
-
-### 6. Configuration — `config.py`
+### 5. Configuration — `config.py`
 
 Parses OpenVPN-style configuration files.
 
@@ -147,7 +155,7 @@ verb 3
 
 Returns a `Config` dataclass with typed fields.
 
-### 7. Routing — `routing.py`
+### 6. Routing — `routing.py`
 
 Manages system routing and NAT rules.
 
@@ -156,17 +164,17 @@ Manages system routing and NAT rules.
 - Manages `iptables` MASQUERADE rule for NAT
 - Optionally redirects all traffic (default gateway) through VPN
 
-### 8. Server — `server.py`
+### 7. Server — `server.py`
 
 Multi-client VPN server using `asyncio`.
 
-- Accepts incoming UDP connections
+- Accepts incoming UDP/TCP connections
 - Manages client sessions (handshake → data → disconnect)
 - Virtual IP allocation pool (`ifconfig-pool`)
 - Routes traffic between clients and LAN
 - Connection timeout and cleanup
 
-### 9. Client — `client.py`
+### 8. Client — `client.py`
 
 VPN client.
 
@@ -180,18 +188,16 @@ VPN client.
 
 ## Technology Stack
 
-| Component       | Library              | Rationale                           |
-|-----------------|----------------------|-------------------------------------|
-| TUN/TAP         | `fcntl` (stdlib)     | Direct kernel interface, minimal    |
-| TLS             | `ssl` (stdlib)       | Built-in OpenSSL wrapper            |
-| X.509 certs     | `cryptography`       | Load/verify PEM certificates        |
-| AES-256-GCM     | `cryptography`       | Authenticated encryption, safe API  |
-| X25519/ECDH     | `cryptography`       | Key exchange for PFS                |
-| Async I/O       | `asyncio` (stdlib)   | Single-threaded concurrency         |
-| Config parser   | `configparser`       | INI-like format                     |
-| Compression     | `lz4`                | Fast, optional data compression     |
-| Packet parsing  | `construct`          | Declarative binary protocol          |
-| CLI             | `argparse` (stdlib)  | Command-line arguments              |
+| Component | Library | Rationale |
+|---|---|---|
+| TUN/TAP | `fcntl` (stdlib) | Direct kernel interface, minimal |
+| X.509 certs | `cryptography` | Load/verify PEM certificates |
+| AES-256-GCM | `cryptography` | Authenticated encryption |
+| X25519/ECDH | `cryptography` | Key exchange for PFS |
+| Async I/O | `asyncio` (stdlib) | Single-threaded concurrency |
+| Config parser | `configparser` | INI-like format |
+| Compression | `lz4` | Fast, optional data compression |
+| CLI | `argparse` (stdlib) | Command-line arguments |
 
 ---
 
@@ -200,197 +206,138 @@ VPN client.
 ```
 vpn-app/
 ├── README.md
-├── README.md
 ├── requirements.txt
 ├── setup.py
 ├── examples/
 │   ├── server.conf
 │   └── client.conf
-├── certs/                          # Certificate generation
-│   ├── generate.sh                 #   openssl wrapper
-│   └── openssl.cnf
 ├── src/
 │   ├── __init__.py
 │   ├── app.py                      # Entry point
 │   ├── cli.py                      # CLI argument parsing
 │   ├── config.py                   # Config file parser
-│   ├── tun.py                      # TUN interface
+│   ├── tun.py                      # TUN interface (Linux)
+│   ├── tun_windows.py              # TUN interface (Windows, partial)
 │   ├── server.py                   # VPN server
 │   ├── client.py                   # VPN client
 │   ├── routing.py                  # Routing & iptables
-│   ├── compression.py              # LZ4 wrapper
-│   ├── utils.py                    # Helpers
+│   ├── status.py                   # Status file output
 │   ├── crypto/
 │   │   ├── __init__.py
-│   │   ├── tls.py                  # TLS session
 │   │   ├── cipher.py               # AES-256-GCM
 │   │   ├── certificates.py         # Load/verify certs
-│   │   └── key_exchange.py         # ECDH + HKDF
+│   │   └── key_exchange.py         # X25519 + HKDF
 │   ├── protocol/
 │   │   ├── __init__.py
-│   │   ├── control.py              # Control channel
-│   │   ├── data.py                 # Data channel
+│   │   ├── control.py              # Control channel (ECDH handshake)
+│   │   ├── data.py                 # Data channel (encrypted tunnel)
 │   │   ├── packet.py               # Binary packet format
-│   │   └── messages.py             # Message opcodes
+│   │   ├── framing.py              # TCP frame length prefixing
+│   │   └── messages.py             # Opcodes and message types
 │   └── auth/
-│       ├── __init__.py
-│       └── cert_auth.py            # Certificate auth
+│       └── __init__.py
 └── tests/
     ├── __init__.py
-    ├── test_tun.py
-    ├── test_crypto.py
-    ├── test_protocol.py
-    └── test_integration.py
+    ├── test_handshake.py
+    ├── test_integration.py
+    ├── test_multi_client.py
+    └── test_phase4.py
 ```
 
 ---
 
-## Development Phases
+## Handshake Protocol Details
 
-### Phase 1 — Tunnel Foundation
+### Opcodes
 
-Goal: raw UDP tunnel with TUN interface (no encryption).
+| Value | Name | Direction |
+|---|---|---|
+| 1 | HARD_RESET_CLIENT | Client → Server |
+| 2 | HARD_RESET_SERVER | Server → Client |
+| 3 | CONTROL | Bidirectional |
+| 4 | ACK | Bidirectional |
+| 5 | DATA | Bidirectional |
 
-**Tasks:**
-- [ ] Scaffold project structure, `setup.py`, `requirements.txt`
-- [ ] Implement `tun.py` — TUN device create/read/write/destroy
-- [ ] Implement basic UDP client/server with packet forwarding
-- [ ] Implement `cli.py` + `config.py`
-- [ ] Test: two machines can ping through raw tunnel
+### Control Message Types
 
-**Deliverable:** `sudo python -m src.app client --remote 192.168.1.100` forwards pings.
+| Value | Name | Description |
+|---|---|---|
+| 1 | CLIENT_HELLO | Client cert + ephemeral public key |
+| 2 | SERVER_HELLO | Server cert + ephemeral public key + signature |
+| 3 | CLIENT_FINISHED | Client signature to complete handshake |
+| 4 | KEEPALIVE | Session keep-alive |
+| 5 | SHUTDOWN | Session termination |
+| 6 | IP_ASSIGN | Server assigns virtual IP to client |
 
-### Phase 2 — Encryption
+### Key Exchange
 
-Goal: authenticated, encrypted tunnel with key exchange.
-
-**Tasks:**
-- [ ] Certificate generation script (CA, server, client via openssl)
-- [ ] `crypto/certificates.py` — load and verify PEM certs
-- [ ] `crypto/tls.py` — TLS handshake over our UDP framing
-- [ ] `protocol/control.py` — handshake sequence with mTLS
-- [ ] `crypto/key_exchange.py` — X25519 + HKDF for PFS
-- [ ] `crypto/cipher.py` — AES-256-GCM encrypt/decrypt
-- [ ] `protocol/data.py` — encrypted data channel
-- [ ] Test: Wireshark on tunnel shows only encrypted UDP
-
-**Deliverable:** pings go through, but the UDP stream is encrypted with forward secrecy.
-
-### Phase 3 — Multi-Client Server & Routing
-
-Goal: server handles multiple clients, pushes routes, NAT.
-
-**Tasks:**
-- [ ] `server.py` — asyncio-based multi-client acceptor
-- [ ] Virtual IP pool (`ifconfig-pool`)
-- [ ] Per-client session state machine
-- [ ] `routing.py` — push routes to clients
-- [ ] NAT via iptables MASQUERADE
-- [ ] Redirect-gateway option
-- [ ] Test: 3+ clients connected, can ping each other via VPN
-
-**Deliverable:** multi-client VPN server with LAN access.
-
-### Phase 4 — Production Polish
-
-Goal: stable, resilient, well-behaved application.
-
-**Tasks:**
-- [ ] Keep-alive with configurable interval
-- [ ] Auto-reconnect on timeout
-- [ ] Graceful shutdown (SIGTERM, SIGINT handlers)
-- [ ] Structured logging (module-level loggers)
-- [ ] LZ4 compression option
-- [ ] Packet fragmentation for large payloads
-- [ ] Status file (like OpenVPN's management interface)
-- [ ] Integration tests with loopback TUN
-
-**Deliverable:** production-quality personal VPN.
-
-### Phase 5 — Extras (optional)
-
-- [ ] Systemd service unit
-- [ ] TAP (layer 2) mode
-- [ ] TCP transport fallback
-- [ ] SOCKS5 forward proxy integration
-- [ ] Prometheus metrics
-
----
-
-## Key Protocol Details
-
-### Control Channel Opcodes
+After the handshake, session keys are derived via X25519 ECDH + HKDF:
 
 ```python
-P_CONTROL_HARD_RESET_CLIENT_V2 = 1  # Client initiates
-P_CONTROL_HARD_RESET_SERVER_V2 = 2  # Server response
-P_CONTROL_V1                     = 3  # Control packet (wrapped TLS data)
-P_ACK_V1                         = 4  # Acknowledgement
-P_DATA_V1                        = 5  # Encrypted data
-P_DATA_V2                        = 6  # Encrypted data with packet ID
+shared = private_key.exchange(peer_public_key)
+hkdf = HKDF(
+    algorithm=hashes.SHA256(),
+    length=32,
+    salt=session_id + peer_session_id,
+    info=b"pyvpn-data-channel",
+)
+session_key = hkdf.derive(shared)
 ```
-
-### Frame Header (2 bytes)
-
-```
-Bit:  0 1 2 3 4 5 6 7   8 ... 15
-      +-+-+-+-+-------+-----------+
-      |  Opcode | KeyID |  Payload |
-      +-+-+-+-+-------+-----------+
-```
-
-`Opcode` (4 bits) | `KeyID` (4 bits, for key rotation) → followed by payload length and payload.
 
 ### Data Channel Encryption
 
 ```
 Plaintext:  [IP Packet]
               │
-              ▼ compress (optional)
+              ▼ compress (optional, LZ4)
               │
               ▼ AES-256-GCM Encrypt
               │
-Wire format: [SessionID][PacketID][Nonce][Ciphertext][Auth Tag]
-               4 bytes   4 bytes   12 bytes   var       16 bytes
+Wire format: [PacketID][Nonce][Ciphertext][Auth Tag]
+               4 bytes  12 bytes   var       16 bytes
 ```
 
-### TLS Key Export
+---
 
-After TLS handshake, session keys are derived via:
+## Planned Enhancements
 
-```python
-keying_material = ssl_context.session.export_keying_material(
-    label=b"EXPORTER:PYVPN_DATA_KEY",
-    length=64,
-    context=b""
-)
-data_encrypt_key = keying_material[:32]   # AES-256 key
-data_decrypt_key = keying_material[32:64] # AES-256 key (separate for bidirectional)
-```
-
-Alternatively, use X25519 ECDH for independent key exchange with HKDF derivation.
+- **TLS 1.3 control channel**: Replace custom handshake with full TLS 1.3 over UDP
+- **Replay protection**: PacketID counter + server-side dedup window
+- **Privilege separation**: Drop root after TUN creation + cert load
+- **Certificate generation scripts**: `certs/generate.sh` using openssl
+- **Integration CI**: Automated test runs via GitHub Actions
+- **Windows support**: Full TUN driver integration
 
 ---
 
 ## Security Considerations
 
-| Concern | Mitigation |
-|---------|-----------|
-| No PFS without ECDH | Use X25519 + HKDF for session keys |
-| TLS version | Enforce TLS 1.3 minimum |
-| Certificate validation | Full chain verification, hostname check |
-| Auth tag truncation | Reject if AES-GCM tag validation fails |
-| Replay attacks | PacketID counter + server-side dedup window |
-| DoS on handshake | Limit concurrent handshakes per IP |
-| Privilege separation | Drop root after TUN creation + cert load |
-| Memory secrets | Use `ctypes` to `mlock()` key material |
+| Concern | Current Status |
+|---|---|
+| Forward secrecy (PFS) | ✅ X25519 ECDH + ephemeral keys |
+| Data encryption | ✅ AES-256-GCM |
+| Certificate validation | ✅ Chain verification, signature checks |
+| Auth tag verification | ✅ AES-GCM tag validation |
+| Key derivation | ✅ HKDF with salt |
+| TLS 1.3 control channel | ❌ Planned — currently custom handshake |
+| Replay attack mitigation | ❌ Planned — counter exists, no dedup window yet |
+| DoS protection on handshake | ❌ Planned |
+| Privilege separation | ❌ Planned |
+| Memory secret locking | ❌ Planned |
+
+---
+
+## Requirements
+
+- Linux (TUN support)
+- Python 3.10+
+- Root privileges (for TUN device and iptables)
+- Dependencies: `cryptography`, `lz4` (optional)
 
 ---
 
 ## References
 
 - [OpenVPN Protocol Specification](https://openvpn.net/community-resources/openvpn-protocol/)
-- [OpenVPN Security Overview](https://openvpn.net/community-resources/security-overview/)
 - [Linux TUN/TAP Documentation](https://www.kernel.org/doc/Documentation/networking/tuntap.txt)
-- [RFC 8446 — TLS 1.3](https://datatracker.ietf.org/doc/html/rfc8446)
 - [RFC 5116 — AEAD](https://datatracker.ietf.org/doc/html/rfc5116)
