@@ -16,13 +16,13 @@ Every security property must be classified as one of:
 
 | Property | Status | Evidence |
 |---|---|---|
-| Mutual authentication | Planned / verify | Link source and tests |
-| Session key derivation | Planned / verify | Link source and tests |
+| Mutual authentication | Implemented | `src/protocol/control.py` (`_verify_peer_cert`); `src/protocol/tls_channel.py` (mTLS); `tests/test_handshake.py`, `tests/test_tls_channel.py` |
+| Session key derivation | Implemented | `src/crypto/key_exchange.py` (HKDF + salt); `tests/test_crypto.py` |
 | Replay protection | Implemented | `src/protocol/replay.py`, checked in `src/protocol/data.py`; tests `tests/test_replay.py`, `tests/test_data.py` |
-| Nonce uniqueness | Planned / verify | Link source and tests |
-| Forward secrecy | Planned / verify | Link source and tests |
-| Key rotation | Planned / verify | Link source and tests |
-| DoS resistance on handshake | Planned / verify | Link source and tests |
+| Nonce uniqueness | Implemented | `src/crypto/cipher.py` (`os.urandom(12)` per encrypt); `tests/test_crypto.py` |
+| Forward secrecy | Implemented | Ephemeral X25519 in `src/crypto/key_exchange.py`; `tests/test_crypto.py::TestKeyExchange` |
+| Key rotation | Planned | No rekeying/renogotiation implemented yet |
+| DoS resistance on handshake | Planned | Rate limiting / handshake DoS protection not implemented |
 | Privilege reduction | Partially implemented | `src/privileges.py` (`drop_privileges`/`maybe_drop_privileges`); opt-in `--user`; wired into `src/server.py` and `src/client.py`; `tests/test_privileges.py`. Per-client routes/NAT still require root. |
 
 ## Threat model questions

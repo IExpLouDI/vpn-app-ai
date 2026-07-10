@@ -181,7 +181,7 @@ Client                              Server
 | Skill | Where it's used | Key files |
 |---|---|---|
 | Threat modeling | Understanding attack surface | `docs/SECURITY_MODEL` |
-| Replay attack prevention | Packet deduplication | `src/protocol/data.py` (planned) |
+| Replay attack prevention | Packet deduplication | `src/protocol/replay.py`, wired into `src/protocol/data.py` (✅ Implemented) |
 | Forward secrecy (PFS) | ECDH ephemeral keys | `src/crypto/key_exchange.py` |
 | Certificate validation | Mutual authentication | `src/crypto/certificates.py:21` |
 | Privilege separation | Dropping root after setup | ⚠️ Partial — opt-in `--user` in `src/privileges.py` |
@@ -194,7 +194,7 @@ Client                              Server
 | Passive eavesdropping | AES-256-GCM encryption | ✅ Implemented |
 | Man-in-the-middle | Certificate verification + signatures | ✅ Implemented |
 | Forward secrecy compromise | X25519 ephemeral keys | ✅ Implemented |
-| Replay attacks | Packet counter + dedup window | ❌ Planned |
+| Replay attacks | Packet counter + dedup window | ✅ Implemented (`src/protocol/replay.py`) |
 | DoS on handshake | Rate limiting | ❌ Planned |
 | Key material in swap | mlock() | ❌ Planned |
 

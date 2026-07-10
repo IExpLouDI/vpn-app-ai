@@ -386,11 +386,10 @@ Wire format: [PacketID][Nonce][Ciphertext][Auth Tag]
 
 ## Planned Enhancements
 
-- **TLS 1.3 control channel**: ✅ Implemented — mutual TLS 1.3 over TCP control channel (`src/protocol/tls_channel.py`); the data channel remains AES-256-GCM over UDP.
-- **Replay protection**: ✅ Implemented — sliding-window PacketID dedup (`src/protocol/replay.py`) checked in `DataChannel.decrypt`.
-- **Privilege separation**: ⚠️ Partial — drop root to an unprivileged user (`--user`, default `nobody`) after initial TUN/IP/route setup (`src/privileges.py`). Full separation (per-client routes, NAT) still requires a privileged helper process.
+The authoritative, per-feature status is maintained in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) (canonical source of truth), with a summary in the [Implementation Status](#implementation-status) table above. Genuinely remaining planned work:
+
 - **Certificate generation scripts**: `certs/generate.sh` using openssl
-- **Integration CI**: Automated test runs via GitHub Actions
+- **Integration CI**: Privileged system tests (root + TUN) automated via GitHub Actions
 - **Windows support**: Full TUN driver integration
 
 ---
@@ -404,8 +403,8 @@ Wire format: [PacketID][Nonce][Ciphertext][Auth Tag]
 | Certificate validation | ✅ Chain verification, signature checks |
 | Auth tag verification | ✅ AES-GCM tag validation |
 | Key derivation | ✅ HKDF with salt |
-| TLS 1.3 control channel | ✅ Implemented — mutual TLS 1.3 over TCP (`src/protocol/tls_channel.py`) |
-| Replay attack mitigation | ❌ Planned — counter exists, no dedup window yet |
+| TLS 1.3 control channel | ✅ Implemented (module) — mutual TLS 1.3 over TCP in `src/protocol/tls_channel.py` (with `tests/test_tls_channel.py`). Not yet wired as the default server/client control path; the running VPN still uses the custom X25519 ECDH handshake from `src/protocol/control.py`. |
+| Replay attack mitigation | ✅ Implemented — sliding-window PacketID dedup (`src/protocol/replay.py`, checked in `DataChannel.decrypt`) |
 | DoS protection on handshake | ❌ Planned |
 | Privilege separation | ⚠️ Partial — drops to `--user` after setup; per-client routes/NAT still require privileges |
 | Memory secret locking | ❌ Planned |
