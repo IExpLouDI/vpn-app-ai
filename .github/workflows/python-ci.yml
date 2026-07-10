@@ -2,7 +2,9 @@ name: Python CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
   lint-and-test:
@@ -25,14 +27,13 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pytest ruff
 
+      - name: Lint
+        run: ruff check .
+
+      - name: Run unit tests
+        run: pytest -v --tb=short
+
       - name: Packaging smoke test
         run: |
-          pip install . || true
-
-      - name: Lint
-        run: |
-          ruff check .
-
-      - name: Run tests
-        run: |
-          pytest -q
+          pip install .
+          python -c "from src.app import main; print('Package import OK')"
