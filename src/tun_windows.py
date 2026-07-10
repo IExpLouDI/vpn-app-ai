@@ -10,7 +10,6 @@ import os
 import platform
 import subprocess
 import threading
-
 from ctypes import wintypes
 
 logger = logging.getLogger("pyvpn.tun_windows")

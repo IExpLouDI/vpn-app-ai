@@ -6,7 +6,7 @@ import time
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec, rsa, padding
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.x509 import Certificate, load_pem_x509_certificate
 
 from ..crypto.certificates import load_certificate, load_private_key, verify_certificate

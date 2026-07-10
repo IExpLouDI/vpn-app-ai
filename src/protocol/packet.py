@@ -2,7 +2,6 @@ import struct
 
 from .messages import Opcode
 
-
 HEADER_FORMAT = "!B Q"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 
