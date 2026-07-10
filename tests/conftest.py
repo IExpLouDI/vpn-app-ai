@@ -13,6 +13,10 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 
+def _now():
+    return datetime.datetime.now(datetime.UTC)
+
+
 def _make_self_signed_cert(key, subject_name: str) -> x509.Certificate:
     subject = issuer = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, subject_name),
@@ -23,8 +27,8 @@ def _make_self_signed_cert(key, subject_name: str) -> x509.Certificate:
         .issuer_name(issuer)
         .public_key(key.public_key())
         .serial_number(1000)
-        .not_valid_before(datetime.datetime.utcnow() - datetime.timedelta(days=1))
-        .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=365))
+        .not_valid_before(_now() - datetime.timedelta(days=1))
+        .not_valid_after(_now() + datetime.timedelta(days=365))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .sign(key, hashes.SHA256(), default_backend())
     )
@@ -40,8 +44,8 @@ def _make_cert(ca_key, ca_cert, subject_key, subject_name: str) -> x509.Certific
         .issuer_name(ca_cert.subject)
         .public_key(subject_key.public_key())
         .serial_number(1001)
-        .not_valid_before(datetime.datetime.utcnow() - datetime.timedelta(days=1))
-        .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=365))
+        .not_valid_before(_now() - datetime.timedelta(days=1))
+        .not_valid_after(_now() + datetime.timedelta(days=365))
         .add_extension(
             x509.BasicConstraints(ca=False, path_length=None), critical=True
         )

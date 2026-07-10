@@ -100,24 +100,49 @@ class TestHandshake:
         assert decrypted == plain
 
     def test_handshake_reject_bad_cert(self, cert_files, tmp_path):
+        import datetime
+        from cryptography import x509
+        from cryptography.hazmat.backends import default_backend
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
         ca = str(cert_files / "ca.crt")
         server_crt = str(cert_files / "server.crt")
         server_key = str(cert_files / "server.key")
 
-        wrong_key = str(cert_files / "client.key")
+        wrong_key = rsa.generate_private_key(65537, 2048, default_backend())
+        wrong_cert = (
+            x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Evil Client")]))
+            .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Evil Client")]))
+            .public_key(wrong_key.public_key())
+            .serial_number(999)
+            .not_valid_before(datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1))
+            .not_valid_after(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=365))
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .sign(wrong_key, hashes.SHA256(), default_backend())
+        )
+        wrong_cert_path = tmp_path / "evil.crt"
+        wrong_key_path = tmp_path / "evil.key"
+        wrong_cert_path.write_bytes(wrong_cert.public_bytes(serialization.Encoding.PEM))
+        wrong_key_path.write_bytes(
+            wrong_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.TraditionalOpenSSL,
+                serialization.NoEncryption(),
+            )
+        )
 
         server_session = Session(is_server=True)
         server_session.configure(ca, server_crt, server_key)
 
         client_session = Session(is_server=False)
-        client_session.configure(ca, server_crt, wrong_key)
+        client_session.configure(ca, str(wrong_cert_path), str(wrong_key_path))
 
         c1 = client_start_handshake(client_session)
         s1 = server_handle_reset(server_session, c1[0])
         c2 = client_handle_reset_ack(client_session, s1[0])
         _, _, payload = decode_packet(c2[0])
-
-        with pytest.raises(Exception):
-            s2 = server_handle_client_hello(server_session, payload[1:])
-            if len(s2) == 0:
-                raise AssertionError("Handshake should fail with wrong key")
+        s2 = server_handle_client_hello(server_session, payload[1:])
+        assert len(s2) == 0, "Server should reject client cert not signed by CA"

@@ -98,14 +98,18 @@ class DataChannel:
         if len(inner) < 1:
             return None
 
-        first_byte = inner[0]
+        plain = self._decompress(inner)
+        if plain is None:
+            return None
+        if len(plain) < 1:
+            return plain
 
-        if first_byte & FRAG_MASK:
-            if len(inner) < 4:
+        if plain[0] & FRAG_MASK:
+            if len(plain) < 4:
                 return None
-            total = inner[1]
-            index = inner[2]
-            raw = inner[3:]
+            total = plain[1]
+            index = plain[2]
+            raw = plain[3:]
             group_id = pkt_counter - index
 
             if group_id not in self._fragments:
@@ -126,10 +130,10 @@ class DataChannel:
             if len(buf["fragments"]) == total:
                 data = b"".join(buf["fragments"][i] for i in range(total))
                 self._fragments.pop(group_id, None)
-                return self._decompress(data)
+                return data
             return None
-        else:
-            return self._decompress(inner)
+
+        return plain
 
     def _decompress(self, inner: bytes) -> bytes | None:
         comp_type = inner[0]
