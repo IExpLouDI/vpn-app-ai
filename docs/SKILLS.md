@@ -184,7 +184,7 @@ Client                              Server
 | Replay attack prevention | Packet deduplication | `src/protocol/data.py` (planned) |
 | Forward secrecy (PFS) | ECDH ephemeral keys | `src/crypto/key_exchange.py` |
 | Certificate validation | Mutual authentication | `src/crypto/certificates.py:21` |
-| Privilege separation | Dropping root after setup | Planned |
+| Privilege separation | Dropping root after setup | ⚠️ Partial — opt-in `--user` in `src/privileges.py` |
 | Memory security (mlock) | Preventing key leakage | Planned |
 
 ### Threat model summary:

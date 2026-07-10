@@ -90,6 +90,11 @@ def parse_args(argv: list[str] | None = None) -> Config:
         metavar="FILE",
         help="Write status file periodically (e.g., /tmp/vpn.status)",
     )
+    parser.add_argument(
+        "--user",
+        metavar="USER",
+        help="Drop root privileges to this user after setup (privilege separation)",
+    )
 
     ns = parser.parse_args(argv)
 

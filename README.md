@@ -113,7 +113,7 @@ is verified. Useful for local testing.
 | Windows TUN support | ⚠️ Partial | `src/tun_windows.py` |
 | TLS 1.3 control channel | ✅ Implemented | `src/protocol/tls_channel.py` |
 | Replay protection (dedup window) | ✅ Implemented | `src/protocol/replay.py`, `src/protocol/data.py` |
-| Privilege separation | ❌ Planned (not implemented) | — |
+| Privilege separation | ⚠️ Partial | `src/privileges.py`; opt-in via `--user` |
 | Certificate generation scripts | ❌ Planned (not implemented) | — |
 | Integration CI | ❌ Planned (not implemented) | — |
 
@@ -388,7 +388,7 @@ Wire format: [PacketID][Nonce][Ciphertext][Auth Tag]
 
 - **TLS 1.3 control channel**: ✅ Implemented — mutual TLS 1.3 over TCP control channel (`src/protocol/tls_channel.py`); the data channel remains AES-256-GCM over UDP.
 - **Replay protection**: ✅ Implemented — sliding-window PacketID dedup (`src/protocol/replay.py`) checked in `DataChannel.decrypt`.
-- **Privilege separation**: Drop root after TUN creation + cert load
+- **Privilege separation**: ⚠️ Partial — drop root to an unprivileged user (`--user`, default `nobody`) after initial TUN/IP/route setup (`src/privileges.py`). Full separation (per-client routes, NAT) still requires a privileged helper process.
 - **Certificate generation scripts**: `certs/generate.sh` using openssl
 - **Integration CI**: Automated test runs via GitHub Actions
 - **Windows support**: Full TUN driver integration
@@ -407,7 +407,7 @@ Wire format: [PacketID][Nonce][Ciphertext][Auth Tag]
 | TLS 1.3 control channel | ✅ Implemented — mutual TLS 1.3 over TCP (`src/protocol/tls_channel.py`) |
 | Replay attack mitigation | ❌ Planned — counter exists, no dedup window yet |
 | DoS protection on handshake | ❌ Planned |
-| Privilege separation | ❌ Planned |
+| Privilege separation | ⚠️ Partial — drops to `--user` after setup; per-client routes/NAT still require privileges |
 | Memory secret locking | ❌ Planned |
 
 ---

@@ -21,6 +21,7 @@ class Config:
     verb: int = 1
     redirect_gateway: bool = False
     status_file: Optional[str] = None
+    user: Optional[str] = None
     extra_options: dict = field(default_factory=dict)
 
     def get_mode(self) -> str:
@@ -51,6 +52,7 @@ DIRECTIVES = {
     "keepalive": ("keepalive_interval", "keepalive_timeout"),
     "verb": "verb",
     "redirect-gateway": "redirect_gateway",
+    "user": "user",
 }
 
 NETMASK_DIRECTIVES = {"server"}

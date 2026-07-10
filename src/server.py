@@ -6,6 +6,7 @@ import struct
 import time
 
 from config import Config
+from privileges import maybe_drop_privileges
 from protocol.control import (
     Session,
     server_handle_client_finished,
@@ -96,6 +97,8 @@ class VpnServer:
 
         enable_ip_forward()
         add_route(self._server_network, dev=self.config.dev)
+
+        maybe_drop_privileges(self.config.user)
 
         loop = asyncio.get_event_loop()
 

@@ -6,6 +6,7 @@ import subprocess
 import time
 
 from config import Config
+from privileges import maybe_drop_privileges
 from protocol.control import (
     Session,
     client_handle_reset_ack,
@@ -250,6 +251,8 @@ class VpnClient:
             subprocess.run(gw_cmd, capture_output=True)
             self._routes_added.append(gw_cmd)
             logger.info("Default route redirected via VPN")
+
+        maybe_drop_privileges(self.config.user)
 
         logger.info("TUN configured: %s/24 via %s", ip_str, self.config.dev)
 

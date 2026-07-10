@@ -23,7 +23,7 @@ Every security property must be classified as one of:
 | Forward secrecy | Planned / verify | Link source and tests |
 | Key rotation | Planned / verify | Link source and tests |
 | DoS resistance on handshake | Planned / verify | Link source and tests |
-| Privilege reduction | Planned / verify | Link source and tests |
+| Privilege reduction | Partially implemented | `src/privileges.py` (`drop_privileges`/`maybe_drop_privileges`); opt-in `--user`; wired into `src/server.py` and `src/client.py`; `tests/test_privileges.py`. Per-client routes/NAT still require root. |
 
 ## Threat model questions
 
