@@ -61,3 +61,27 @@ class TestDataChannel:
         encrypted = bytearray(c1.encrypt(plain)[0])
         encrypted[20] ^= 0xff
         assert c2.decrypt(bytes(encrypted)) is None
+
+    def test_replay_detection(self, channel_pair):
+        c1, c2 = channel_pair
+        plain = b"replay me"
+        wire = c1.encrypt(plain)[0]
+        assert c2.decrypt(wire) == plain
+        assert c2.decrypt(wire) is None
+
+    def test_distinct_packets_accepted(self, channel_pair):
+        c1, c2 = channel_pair
+        w1 = c1.encrypt(b"one")[0]
+        w2 = c1.encrypt(b"two")[0]
+        assert c2.decrypt(w1) == b"one"
+        assert c2.decrypt(w2) == b"two"
+
+    def test_out_of_window_rejected(self):
+        cipher = Cipher(Cipher.generate_key())
+        c1 = DataChannel(b"\x01" * 8, b"\x02" * 8, cipher, replay_window=4)
+        c2 = DataChannel(b"\x02" * 8, b"\x01" * 8, cipher, replay_window=4)
+        wires = [c1.encrypt(b"p%d" % i)[0] for i in range(10)]
+        for w in wires:
+            assert c2.decrypt(w) is not None
+        assert c2.decrypt(wires[0]) is None
+        assert c2.decrypt(wires[9]) is None

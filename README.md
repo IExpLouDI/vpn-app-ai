@@ -112,7 +112,7 @@ is verified. Useful for local testing.
 | Auto-reconnect | ✅ Implemented | `src/client.py` |
 | Windows TUN support | ⚠️ Partial | `src/tun_windows.py` |
 | TLS 1.3 control channel | ✅ Implemented | `src/protocol/tls_channel.py` |
-| Replay protection (dedup window) | ❌ Planned (not implemented) | — |
+| Replay protection (dedup window) | ✅ Implemented | `src/protocol/replay.py`, `src/protocol/data.py` |
 | Privilege separation | ❌ Planned (not implemented) | — |
 | Certificate generation scripts | ❌ Planned (not implemented) | — |
 | Integration CI | ❌ Planned (not implemented) | — |
@@ -387,7 +387,7 @@ Wire format: [PacketID][Nonce][Ciphertext][Auth Tag]
 ## Planned Enhancements
 
 - **TLS 1.3 control channel**: ✅ Implemented — mutual TLS 1.3 over TCP control channel (`src/protocol/tls_channel.py`); the data channel remains AES-256-GCM over UDP.
-- **Replay protection**: PacketID counter + server-side dedup window
+- **Replay protection**: ✅ Implemented — sliding-window PacketID dedup (`src/protocol/replay.py`) checked in `DataChannel.decrypt`.
 - **Privilege separation**: Drop root after TUN creation + cert load
 - **Certificate generation scripts**: `certs/generate.sh` using openssl
 - **Integration CI**: Automated test runs via GitHub Actions

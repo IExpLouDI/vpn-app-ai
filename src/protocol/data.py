@@ -6,6 +6,7 @@ from crypto.cipher import Cipher
 
 from .messages import Opcode
 from .packet import decode_packet, encode_packet
+from .replay import ReplayWindow
 
 logger = logging.getLogger("pyvpn.protocol.data")
 
@@ -30,12 +31,14 @@ def derive_session_id(our_id: bytes, peer_id: bytes) -> bytes:
 
 
 class DataChannel:
-    def __init__(self, our_id: bytes, peer_id: bytes, cipher: Cipher, comp_lzo: bool = False):
+    def __init__(self, our_id: bytes, peer_id: bytes, cipher: Cipher, comp_lzo: bool = False,
+                 replay_window: int = 64):
         self.shared_id = derive_session_id(our_id, peer_id)
         self.cipher = cipher
         self.packet_counter = 0
         self.comp_lzo = comp_lzo and _HAS_LZ4
         self._fragments: dict[int, dict] = {}
+        self.replay = ReplayWindow(replay_window)
 
     def _encrypt_one(self, plaintext: bytes, counter: int) -> bytes:
         counter_bytes = struct.pack("!I", counter)
@@ -88,6 +91,11 @@ class DataChannel:
 
         counter_bytes = payload[:4]
         pkt_counter = struct.unpack("!I", counter_bytes)[0]
+
+        if not self.replay.check(pkt_counter):
+            logger.warning("Replay detected, dropping packet id=%d", pkt_counter)
+            return None
+
         encrypted = payload[4:]
         aad = self.shared_id + counter_bytes
         try:
