@@ -63,6 +63,23 @@ class IpPool:
         return self._allocated_by_int.get(ip_int)
 
 
+def get_default_interface() -> str | None:
+    """Return the interface name of the default route, or None."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ip", "route", "show", "default"],
+            check=True, capture_output=True, text=True,
+        )
+    except Exception:
+        return None
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if "dev" in parts:
+            return parts[parts.index("dev") + 1]
+    return None
+
+
 def setup_nat(interface: str, tun_network: str) -> None:
     import subprocess
     logger.info("Setting up NAT on %s for %s", interface, tun_network)
@@ -75,6 +92,16 @@ def setup_nat(interface: str, tun_network: str) -> None:
         ["iptables", "-t", "nat", "-A", "POSTROUTING",
          "-s", tun_network, "-o", interface, "-j", "MASQUERADE"],
         check=True, capture_output=True,
+    )
+
+
+def teardown_nat(interface: str, tun_network: str) -> None:
+    import subprocess
+    logger.info("Removing NAT on %s for %s", interface, tun_network)
+    subprocess.run(
+        ["iptables", "-t", "nat", "-D", "POSTROUTING",
+         "-s", tun_network, "-o", interface, "-j", "MASQUERADE"],
+        capture_output=True,
     )
 
 
@@ -116,13 +143,3 @@ def delete_route(network: str, via: str | None = None, dev: str | None = None) -
         subprocess.run(cmd, check=True, capture_output=True)
     except Exception:
         pass
-
-
-def push_route(client_ip: str, route: str, gateway: str, tun_dev: str) -> str | None:
-    import subprocess
-    cmd = ["ip", "route", "add", route, "via", gateway, "dev", tun_dev]
-    try:
-        subprocess.run(cmd, check=True, capture_output=True)
-        return None
-    except subprocess.CalledProcessError as e:
-        return e.stderr.decode() if e.stderr else "unknown error"

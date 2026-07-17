@@ -17,7 +17,15 @@ from protocol.data import DataChannel
 from protocol.framing import frame_packet, read_frame
 from protocol.messages import MessageType, Opcode
 from protocol.packet import decode_packet
-from routing import IpPool, add_route, delete_route, enable_ip_forward
+from routing import (
+    IpPool,
+    add_route,
+    delete_route,
+    enable_ip_forward,
+    get_default_interface,
+    setup_nat,
+    teardown_nat,
+)
 from tun import TunInterface
 
 logger = logging.getLogger("pyvpn.server")
@@ -56,6 +64,7 @@ class VpnServer:
         self.clients: dict[tuple, ClientSession] = {}
         self.ip_to_addr: dict[str, tuple] = {}
         self._running = False
+        self._nat_interface: str | None = None
 
         self.ip_pool: IpPool | None = None
         if config.server:
@@ -97,6 +106,16 @@ class VpnServer:
 
         enable_ip_forward()
         add_route(self._server_network, dev=self.config.dev)
+
+        nat_iface = get_default_interface()
+        if nat_iface:
+            try:
+                setup_nat(nat_iface, self._server_network)
+                self._nat_interface = nat_iface
+            except Exception as e:
+                logger.warning("NAT setup failed (root + iptables required): %s", e)
+        else:
+            logger.warning("No default route found; skipping NAT setup")
 
         maybe_drop_privileges(self.config.user)
 
@@ -157,6 +176,9 @@ class VpnServer:
         self.clients.clear()
         self.ip_to_addr.clear()
         delete_route(self._server_network, dev=self.config.dev)
+        if self._nat_interface:
+            teardown_nat(self._nat_interface, self._server_network)
+            self._nat_interface = None
 
     def _close_tcp_writer(self, cs: ClientSession) -> None:
         if cs.writer and not cs.writer.is_closing():

@@ -97,8 +97,10 @@ def _verify(cert: Certificate, data: bytes, sig: bytes) -> bool:
 
 
 def _verify_peer_cert(session: Session) -> bool:
-    if not session._ca_path or not session.peer_cert:
-        return True
+    if not session._ca_path:
+        return True  # dev mode: no CA configured, no verification
+    if not session.peer_cert:
+        return False  # auth mode: peer certificate is required
     ca = load_certificate(session._ca_path)
     return verify_certificate(session.peer_cert, ca)
 
@@ -144,13 +146,10 @@ def client_handle_reset_ack(session: Session, raw: bytes) -> list[bytes]:
     session.peer_session_id = struct.pack("!Q", sid)
     session.state = HandshakeState.RESET_RCVD
 
-    if not session._local_cert_bytes:
-        logger.error("Client: no local cert configured")
-        session.state = HandshakeState.ERROR
-        return []
-
+    # Dev mode (no cert configured): send an empty certificate; the peer
+    # accepts it only when it also runs without a CA (see _verify_peer_cert).
     my_pub = public_key_to_bytes(session._public_eph)
-    inner = _pack_cert_and_pubkey(session._local_cert_bytes, my_pub)
+    inner = _pack_cert_and_pubkey(session._local_cert_bytes or b"", my_pub)
     sid = int.from_bytes(session.session_id, "big")
     packet = encode_handshake_message(MessageType.CLIENT_HELLO, sid, inner)
     logger.info("Client: sent CLIENT_HELLO")
@@ -167,7 +166,10 @@ def server_handle_client_hello(session: Session, payload: bytes) -> list[bytes]:
     try:
         cert_data, pub_data, _ = _unpack_hello(payload)
         session._peer_pub_eph = pub_data
-        session.peer_cert = load_pem_x509_certificate(cert_data, default_backend())
+        session.peer_cert = (
+            load_pem_x509_certificate(cert_data, default_backend())
+            if cert_data else None
+        )
 
         if not _verify_peer_cert(session):
             logger.error("Server: CLIENT_HELLO cert verification FAILED")
@@ -211,7 +213,10 @@ def client_handle_server_hello(session: Session, payload: bytes) -> list[bytes]:
         offset += 2
         sig = payload[offset:offset+sig_len]
 
-        session.peer_cert = load_pem_x509_certificate(cert_data, default_backend())
+        session.peer_cert = (
+            load_pem_x509_certificate(cert_data, default_backend())
+            if cert_data else None
+        )
 
         if not _verify_peer_cert(session):
             logger.error("Client: SERVER_HELLO cert verification FAILED")
@@ -226,7 +231,9 @@ def client_handle_server_hello(session: Session, payload: bytes) -> list[bytes]:
 
         my_pub = public_key_to_bytes(session._public_eph)
         check_data = my_pub + pub_data
-        if not _verify(session.peer_cert, check_data, sig):
+        # Dev mode (no cert from peer) has nothing to verify against;
+        # with a cert the signature proves possession of the private key.
+        if session.peer_cert is not None and not _verify(session.peer_cert, check_data, sig):
             logger.error("Client: SERVER_HELLO signature FAILED")
             session.state = HandshakeState.ERROR
             return []
@@ -253,7 +260,9 @@ def server_handle_client_finished(session: Session, payload: bytes) -> list[byte
 
         my_pub = public_key_to_bytes(session._public_eph)
         check_data = (session._peer_pub_eph or b"") + my_pub
-        if not _verify(session.peer_cert, check_data, sig):
+        # Dev mode (no client cert) skips signature verification; with a
+        # cert the signature is required (auth mode, see _verify_peer_cert).
+        if session.peer_cert is not None and not _verify(session.peer_cert, check_data, sig):
             logger.error("Server: CLIENT_FINISHED signature FAILED")
             session.state = HandshakeState.ERROR
             return []

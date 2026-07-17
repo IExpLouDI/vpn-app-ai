@@ -8,6 +8,7 @@ TOP_LEVEL_MODULES = [
     "client",
     "routing",
     "tun",
+    "tun_windows",
     "status",
     "privileges",
 ]

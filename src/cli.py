@@ -17,18 +17,18 @@ def parse_args(argv: list[str] | None = None) -> Config:
     parser.add_argument(
         "--port", "-p",
         type=int,
-        default=1194,
+        default=None,
         help="UDP port (default: 1194)",
     )
     parser.add_argument(
         "--proto",
         choices=["udp", "tcp"],
-        default="udp",
+        default=None,
         help="Transport protocol (default: udp)",
     )
     parser.add_argument(
         "--dev",
-        default="tun",
+        default=None,
         help="TUN device name (default: tun)",
     )
     parser.add_argument(
@@ -57,32 +57,34 @@ def parse_args(argv: list[str] | None = None) -> Config:
     )
     parser.add_argument(
         "--cipher",
-        default="AES-256-GCM",
+        default=None,
         help="Data channel cipher (default: AES-256-GCM)",
     )
     parser.add_argument(
         "--comp-lzo",
         action="store_true",
-        help="Enable LZO compression",
+        default=None,
+        help="Enable LZ4 compression (directive name kept for OpenVPN compatibility)",
     )
     parser.add_argument(
         "--keepalive",
         nargs=2,
         type=int,
         metavar=("INTERVAL", "TIMEOUT"),
-        default=[10, 120],
-        help="Keepalive interval and timeout",
+        default=None,
+        help="Keepalive interval and timeout (default: 10 120)",
     )
     parser.add_argument(
         "--verb",
         type=int,
-        default=1,
+        default=None,
         choices=range(0, 5),
         help="Verbosity level (0-4)",
     )
     parser.add_argument(
         "--redirect-gateway",
         action="store_true",
+        default=None,
         help="Redirect all traffic through VPN",
     )
     parser.add_argument(
@@ -98,32 +100,17 @@ def parse_args(argv: list[str] | None = None) -> Config:
 
     ns = parser.parse_args(argv)
 
-    if ns.config:
-        cfg = Config.from_file(ns.config)
-        cli_overrides = {k: v for k, v in vars(ns).items()
-                         if v is not None and k != "config"}
-        for key, val in cli_overrides.items():
-            attr = key.replace("-", "_")
-            if hasattr(cfg, attr):
-                setattr(cfg, attr, val)
-        return cfg
+    # Defaults come from the Config dataclass (or the config file); only
+    # explicitly provided CLI flags override them.
+    cfg = Config.from_file(ns.config) if ns.config else Config()
 
-    return Config(
-        dev=ns.dev,
-        proto=ns.proto,
-        port=ns.port,
-        remote=ns.remote,
-        server=ns.server,
-        ifconfig=ns.ifconfig,
-        ifconfig_pool=ns.ifconfig_pool,
-        ca=ns.ca,
-        cert=ns.cert,
-        key=ns.key,
-        cipher=ns.cipher,
-        comp_lzo=ns.comp_lzo,
-        keepalive_interval=ns.keepalive[0],
-        keepalive_timeout=ns.keepalive[1],
-        verb=ns.verb,
-        redirect_gateway=ns.redirect_gateway,
-        status_file=ns.status,
-    )
+    for key, val in vars(ns).items():
+        if val is None or key == "config":
+            continue
+        if key == "keepalive":
+            cfg.keepalive_interval, cfg.keepalive_timeout = val
+        elif key == "status":
+            cfg.status_file = val
+        elif hasattr(cfg, key):
+            setattr(cfg, key, val)
+    return cfg

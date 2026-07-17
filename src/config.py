@@ -24,6 +24,14 @@ class Config:
     user: Optional[str] = None
     extra_options: dict = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if self.proto not in ("udp", "tcp"):
+            raise ValueError(f"Invalid proto: {self.proto!r} (allowed: udp, tcp)")
+        if not 1 <= self.port <= 65535:
+            raise ValueError(f"Invalid port: {self.port} (allowed: 1-65535)")
+        if not 0 <= self.verb <= 4:
+            raise ValueError(f"Invalid verb: {self.verb} (allowed: 0-4)")
+
     def get_mode(self) -> str:
         return "server" if self.server else "client"
 
@@ -52,6 +60,7 @@ DIRECTIVES = {
     "keepalive": ("keepalive_interval", "keepalive_timeout"),
     "verb": "verb",
     "redirect-gateway": "redirect_gateway",
+    "status": "status_file",
     "user": "user",
 }
 

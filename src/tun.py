@@ -6,7 +6,7 @@ import subprocess
 system = platform.system().lower()
 
 if system == "windows":
-    from .tun_windows import TunInterface, prefixlen_to_netmask
+    from tun_windows import TunInterface, prefixlen_to_netmask
 else:
     try:
         import fcntl
