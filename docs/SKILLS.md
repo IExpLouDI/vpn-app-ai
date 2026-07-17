@@ -12,13 +12,13 @@ Before working on this project, ensure you have the following skills and knowled
 |---|---|---|
 | Async I/O (`asyncio`) | UDP/TCP event loop, concurrent clients | `src/client.py`, `src/server.py` |
 | Binary protocol handling (`struct`) | Packet encoding/decoding, framing | `src/protocol/packet.py`, `src/protocol/framing.py` |
-| Datagram transport (`asyncio.DatagramProtocol`) | UDP client/server | `src/client.py:285`, `src/server.py:330` |
-| Stream I/O (`asyncio.StreamReader/Writer`) | TCP transport | `src/client.py:174`, `src/server.py:254` |
-| Signal handling | Graceful shutdown | `src/client.py:110`, `src/server.py:115` |
+| Datagram transport (`asyncio.DatagramProtocol`) | UDP client/server | `ClientProtocol` in `src/client.py`, `ServerProtocol` in `src/server.py` |
+| Stream I/O (`asyncio.StreamReader/Writer`) | TCP transport | `VpnClient._tcp_read_loop`, `VpnServer._handle_tcp_client` |
+| Signal handling | Graceful shutdown | `VpnClient._connect`, `VpnServer.run` |
 | Subprocess management | `ip`, `iptables` calls | `src/tun.py`, `src/routing.py` |
-| Context managers (`__enter__`/`__exit__`) | TUN lifecycle | `src/tun.py:90` |
+| Context managers (`__enter__`/`__exit__`) | TUN lifecycle | `TunInterface` in `src/tun.py` |
 | Dataclasses | Config model | `src/config.py` |
-| Enums + IntEnum | Opcodes, states | `src/protocol/messages.py`, `src/protocol/control.py:24` |
+| Enums + IntEnum | Opcodes, states | `src/protocol/messages.py`, `HandshakeState` in `src/protocol/control.py` |
 | `argparse` | CLI argument parsing | `src/cli.py` |
 | `logging` | Structured logging | All modules |
 | Type hints (`str \| None`, generics) | Full codebase | All modules |
@@ -39,10 +39,10 @@ Before working on this project, ensure you have the following skills and knowled
 |---|---|---|
 | AES-256-GCM (authenticated encryption) | Data channel encryption | `src/crypto/cipher.py` |
 | X25519 ECDH (Elliptic Curve Diffie-Hellman) | Key exchange, forward secrecy | `src/crypto/key_exchange.py` |
-| HKDF (HMAC-based Key Derivation Function) | Session key derivation | `src/crypto/key_exchange.py:27` |
+| HKDF (HMAC-based Key Derivation Function) | Session key derivation | `derive_shared_key` in `src/crypto/key_exchange.py` |
 | X.509 certificates (PEM) | Mutual authentication | `src/crypto/certificates.py` |
-| RSA/EC signature creation and verification | Handshake signing | `src/protocol/control.py:71` |
-| Nonce management | Replay prevention basis | `src/crypto/cipher.py:17` |
+| RSA/EC signature creation and verification | Handshake signing | `_sign`/`_verify` in `src/protocol/control.py` |
+| Nonce management | Replay prevention basis | `Cipher.encrypt` in `src/crypto/cipher.py` |
 
 ### Must understand:
 - Difference between symmetric (AES) and asymmetric (ECDH) cryptography
@@ -84,10 +84,10 @@ Client                              Server
 |---|---|---|
 | VPN concepts (OpenVPN, WireGuard) | Overall architecture | `README.md`, `docs/ARCHITECTURE_AS_IS.md` |
 | TUN/TAP interfaces | Virtual tunnel device | `src/tun.py`, `src/tun_windows.py` |
-| IP addressing and CIDR | Subnet configuration, IP pool | `src/config.py:59`, `src/routing.py` |
+| IP addressing and CIDR | Subnet configuration, IP pool | `src/config.py`, `IpPool` in `src/routing.py` |
 | UDP and TCP transport | Data plane | `src/client.py`, `src/server.py` |
-| IP packet structure (IPv4 header) | Packet routing, destination lookup | `src/server.py:344` |
-| MTU and fragmentation | Packet size management | `src/protocol/data.py:15` |
+| IP packet structure (IPv4 header) | Packet routing, destination lookup | `_ipv4_dest` in `src/server.py` |
+| MTU and fragmentation | Packet size management | `MAX_PAYLOAD` in `src/protocol/data.py` |
 | Network namespaces | Integration testing | `tests/legacy/` |
 
 ### Must understand:
@@ -108,8 +108,8 @@ Client                              Server
 |---|---|---|
 | TUN device management | Interface lifecycle | `src/tun.py` |
 | `ip` commands (`addr`, `route`, `link`) | Network configuration | `src/tun.py`, `src/routing.py` |
-| `iptables` | NAT/masquerade | `src/routing.py:66` |
-| IP forwarding (`/proc/sys/net/ipv4/ip_forward`) | Routing between interfaces | `src/routing.py:81` |
+| `iptables` | NAT/masquerade | `setup_nat`/`teardown_nat` in `src/routing.py` |
+| IP forwarding (`/proc/sys/net/ipv4/ip_forward`) | Routing between interfaces | `enable_ip_forward` in `src/routing.py` |
 | Root privileges | All TUN/iptables operations | `src/tun.py`, `src/routing.py` |
 | File descriptors and `fcntl` | TUN device I/O | `src/tun.py` |
 
@@ -144,12 +144,14 @@ Client                              Server
 │ Run manually: sudo pytest tests/legacy/      │
 ├─────────────────────────────────────────────┤
 │ Layer 2: Integration tests (no root)        │
-│ test_handshake.py (full protocol handshake)  │
+│ test_handshake.py (auth + dev-mode flows),  │
+│ test_tls_channel.py (mTLS over TCP)         │
 ├─────────────────────────────────────────────┤
 │ Layer 1: Unit tests (no root, fast)         │
-│ test_config.py, test_crypto.py,             │
+│ test_config.py, test_cli.py, test_crypto.py,│
 │ test_protocol.py, test_data.py,             │
-│ test_routing.py, test_status.py             │
+│ test_replay.py, test_routing.py,            │
+│ test_status.py, test_privileges.py          │
 └─────────────────────────────────────────────┘
 ```
 
@@ -165,12 +167,12 @@ Client                              Server
 | Ruff (linter) | Code quality | `pyproject.toml` (ruff config) |
 | Pip packaging | Distribution | `setup.py` |
 
-### CI pipeline steps:
+### CI pipeline steps (`.github/workflows/python-ci.yml`):
 1. `pip install -r requirements.txt` — install deps (cryptography, lz4)
-2. `pip install pytest ruff` — install dev tools
+2. `pip install pytest ruff` + `pip install -e .` — dev tools + editable package
 3. `ruff check .` — static analysis (import sorting, unused imports, etc.)
 4. `pytest -v --tb=short` — run unit + integration tests
-5. `pip install .` — verify package builds and installs
+5. `python -c "from src.app import main"` — packaging smoke test
 
 ---
 
@@ -180,10 +182,10 @@ Client                              Server
 
 | Skill | Where it's used | Key files |
 |---|---|---|
-| Threat modeling | Understanding attack surface | `docs/SECURITY_MODEL` |
+| Threat modeling | Understanding attack surface | `docs/SECURITY_MODEL.md` |
 | Replay attack prevention | Packet deduplication | `src/protocol/replay.py`, wired into `src/protocol/data.py` (✅ Implemented) |
 | Forward secrecy (PFS) | ECDH ephemeral keys | `src/crypto/key_exchange.py` |
-| Certificate validation | Mutual authentication | `src/crypto/certificates.py:21` |
+| Certificate validation | Mutual authentication | `verify_certificate` in `src/crypto/certificates.py` |
 | Privilege separation | Dropping root after setup | ⚠️ Partial — opt-in `--user` in `src/privileges.py` |
 | Memory security (mlock) | Preventing key leakage | Planned |
 
@@ -207,9 +209,9 @@ Client                              Server
 | Skill | Where it's used | Key files |
 |---|---|---|
 | Binary protocol design | Wire format specification | `src/protocol/` |
-| State machines | Handshake state transitions | `src/protocol/control.py:24` |
+| State machines | Handshake state transitions | `HandshakeState` in `src/protocol/control.py` |
 | Protocol multiplexing | Control + data over single UDP | `src/protocol/packet.py` |
-| Keep-alive mechanism | Session maintenance | `src/client.py:141`, `src/server.py:166` |
+| Keep-alive mechanism | Session maintenance | `VpnServer._send_keepalives` in `src/server.py`, echo in `VpnClient.handle_udp_data` |
 
 ### Wire format overview:
 
@@ -226,11 +228,15 @@ Control message (after header):
 │ (1 byte) │   (variable)   │
 └──────────┴────────────────┘
 
-Data message (after header):
-┌──────────┬──────────┬──────────┬────────────┬────────┐
-│ PacketID │  Nonce   │ Cipher   │ Auth Tag   │ ...    │
-│ (4 bytes)│(12 bytes)│ (var)    │ (16 bytes) │        │
-└──────────┴──────────┴──────────┴────────────┘
+Data message (after header; SessionID = client_id XOR server_id):
+┌──────────┬──────────┬─────────────┬───────────┐
+│ PacketID │  Nonce   │ Ciphertext  │ Auth Tag  │
+│ (4 bytes)│(12 bytes)│  (var)      │ (16 bytes)│
+└──────────┴──────────┴─────────────┴───────────┘
+
+Plaintext inside the ciphertext starts with a 1-byte compression marker:
+  0 = none, 1 = LZ4. Fragmented payloads use 0x80|0 followed by a
+  2-byte fragment header [Total][Index] before the chunk.
 
 TCP framing (prefixes every packet):
 ┌────────────┬──────────────┐
@@ -287,12 +293,15 @@ ruff check .
 # Auto-fix lint issues
 ruff check --fix .
 
-# Install package locally
+# Install package locally (editable — picks up source changes immediately)
 pip install -e .
 
 # Start server (requires root)
-sudo python -m src.app --server 10.8.0.0/24 --ca ca.crt --cert server.crt --key server.key
+sudo pyvpn --server 10.8.0.0/24 --ca ca.crt --cert server.crt --key server.key
 
 # Start client (requires root)
-sudo python -m src.app --remote 10.8.0.1 --ca ca.crt --cert client.crt --key client.key
+sudo pyvpn --remote 10.8.0.1 --ca ca.crt --cert client.crt --key client.key
+
+# Alternative without installing (run from repo root):
+sudo PYTHONPATH=src python3 -m app --server 10.8.0.0/24
 ```

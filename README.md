@@ -7,8 +7,10 @@ tunnel between a client and a server, forwarding IP packets through an encrypted
 UDP/TCP connection.
 
 > **Disclaimer:** This is an educational project. It is **not** intended for production
-> use and has **not** undergone a cryptographic audit. See
-> [Threat Model and Non-Goals](#threat-model-and-non-goals).
+> or commercial use and has **not** undergone a cryptographic audit. Large parts of the
+> code and documentation were AI-generated ("vibe-coded" / neuro-slop) and may contain
+> bugs, inconsistencies, or unreviewed security flaws — do not rely on it to protect
+> real traffic. See [Threat Model and Non-Goals](#threat-model-and-non-goals).
 
 ---
 
@@ -36,7 +38,7 @@ this table. Status legend:
 | Config parser (OpenVPN-style) | ✅ Implemented | — | `src/config.py` |
 | Multi-client server | ✅ Implemented | on (server mode) | `src/server.py` |
 | Virtual IP pool | ✅ Implemented | on (server mode) | `src/routing.py` |
-| NAT / iptables MASQUERADE | ✅ Implemented | on (server mode) | requires root/`iptables` |
+| NAT / iptables MASQUERADE | ✅ Implemented | on (server mode) | auto-detects default-route interface; rule removed on shutdown; requires root/`iptables` |
 | Keep-alive & timeout | ✅ Implemented | on | `keepalive 10 120` |
 | Auto-reconnect | ✅ Implemented | on (client) | `src/client.py` |
 | Replay protection (dedup window) | ✅ Implemented | on | sliding-window PacketID dedup; `src/protocol/replay.py` |
@@ -62,7 +64,8 @@ What is available in the **runtime today** (no flags required unless noted):
 - Replay protection on the data channel (sliding-window PacketID dedup).
 - IP packet fragmentation/reassembly and optional LZ4 compression.
 - Keep-alive, session timeout, and client auto-reconnect.
-- NAT (iptables MASQUERADE) and per-client route installation on the server.
+- NAT (iptables MASQUERADE) on the server: set up automatically on the default-route
+  interface at startup and removed on shutdown.
 - **Dev mode**: omit `ca`/`cert`/`key` to run the handshake without certificate
   authentication (encryption still active, but neither side is verified).
 
@@ -221,7 +224,8 @@ sudo pyvpn -c examples/client.conf
 - The client receives a virtual IP from the server pool (e.g. `10.8.0.2`).
 - Traffic routed to the tunnel (or, with `--redirect-gateway`, all traffic) is encrypted
   with AES-256-GCM and protected against replay.
-- Stopping either side triggers a clean teardown / client auto-reconnect.
+- Stopping either side closes the transport; the peer detects the loss via keepalive
+  timeout, tears the session down, and the client auto-reconnects.
 
 ---
 
@@ -229,7 +233,10 @@ sudo pyvpn -c examples/client.conf
 
 The config file is an **OpenVPN-style contract**: every directive maps to a typed
 `Config` field (`src/config.py`). Unknown directives are preserved under
-`extra_options` and ignored by the core. CLI flags override file values.
+`extra_options` and ignored by the core. **Only explicitly provided** CLI flags
+override file values; parser defaults never stomp the file. `proto`, `port`, and
+`verb` are validated in `Config.__post_init__` (out-of-range values raise
+`ValueError`).
 
 | Directive | Purpose | Type | Required | Allowed values | Default | Constraints |
 |---|---|---|---|---|---|---|
@@ -247,7 +254,7 @@ The config file is an **OpenVPN-style contract**: every directive maps to a type
 | `comp-lzo` | Enable LZ4 compression | flag | no | (present/absent) | off | opt-in |
 | `keepalive` | Keepalive interval/timeout | pair | no | `int int` | `10 120` | seconds |
 | `verb` | Log verbosity | int | no | 0–4 | `1` | — |
-| `redirect-gateway` | Route all traffic via VPN | flag | no | (present/absent) | off | server pushes default route |
+| `redirect-gateway` | Route all traffic via VPN | flag | no | (present/absent) | off | client-side: client installs a default route via the tunnel itself |
 | `status` | Periodic status file | path | no | file | — | — |
 | `user` | Drop privileges after setup | string | no | system username | — | privilege separation (partial) |
 
@@ -369,9 +376,11 @@ Returns a `Config` dataclass with typed fields.
 Manages system routing and NAT rules.
 
 - Adds route to VPN subnet via TUN interface
-- Pushes client-specific routes from server
-- Manages `iptables` MASQUERADE rule for NAT
-- Optionally redirects all traffic (default gateway) through VPN
+- Assigns virtual IPs to clients (`IP_ASSIGN` control message)
+- Manages the `iptables` MASQUERADE rule for NAT (auto-detected default interface,
+  removed on shutdown)
+- Client-side `redirect-gateway`: optionally routes all traffic (default gateway)
+  through the tunnel
 
 ### 7. Server — `server.py`
 
@@ -404,7 +413,7 @@ VPN client.
 | AES-256-GCM | `cryptography` | Authenticated encryption |
 | X25519/ECDH | `cryptography` | Key exchange for PFS |
 | Async I/O | `asyncio` (stdlib) | Single-threaded concurrency |
-| Config parser | `configparser` | INI-like format |
+| Config parser | custom (hand-rolled) | OpenVPN-style whitespace directives |
 | Compression | `lz4` | Fast, optional data compression |
 | CLI | `argparse` (stdlib) | Command-line arguments |
 
@@ -429,37 +438,42 @@ VPN client.
 | 1 | CLIENT_HELLO | Client cert + ephemeral public key |
 | 2 | SERVER_HELLO | Server cert + ephemeral public key + signature |
 | 3 | CLIENT_FINISHED | Client signature to complete handshake |
-| 4 | KEEPALIVE | Session keep-alive |
-| 5 | SHUTDOWN | Session termination |
+| 4 | KEEPALIVE | Session keep-alive (sent by server, echoed by client) |
+| 5 | SHUTDOWN | Defined but **not currently used** — teardown is implicit (transport close + keepalive timeout) |
 | 6 | IP_ASSIGN | Server assigns virtual IP to client |
 
 ### Key Exchange
 
-After the handshake, session keys are derived via X25519 ECDH + HKDF:
+After the handshake, session keys are derived via X25519 ECDH + HKDF. The salt is the
+order-independent concatenation of both session IDs, so client and server compute the
+same value regardless of their roles:
 
 ```python
-shared = private_key.exchange(peer_public_key)
+a, b = session_id, peer_session_id
+salt = a + b if a < b else b + a  # same on both sides
 hkdf = HKDF(
     algorithm=hashes.SHA256(),
     length=32,
-    salt=session_id + peer_session_id,
+    salt=salt,
     info=b"pyvpn-data-channel",
 )
-session_key = hkdf.derive(shared)
+session_key = hkdf.derive(private_key.exchange(peer_public_key))
 ```
 
 ### Data Channel Encryption
 
 ```
-Plaintext:  [IP Packet]
-             │
-             ▼ compress (optional, LZ4)
-             │
-             ▼ AES-256-GCM Encrypt
+Plaintext:  [CompByte][IP Packet]
+             1 byte: 0 = none, 1 = LZ4 (already compressed, if smaller)
+             │  (for fragmented packets: [0x80|0][Total][Index][chunk])
+             ▼ AES-256-GCM Encrypt (AAD = SharedSessionID + PacketID)
              │
 Wire format: [PacketID][Nonce][Ciphertext][Auth Tag]
              4 bytes  12 bytes   var       16 bytes
 ```
+
+The session ID on the wire for DATA packets is `SharedSessionID = client_id XOR
+server_id` (8 bytes).
 
 ---
 
@@ -478,7 +492,7 @@ Wire format: [PacketID][Nonce][Ciphertext][Auth Tag]
 | UDP + custom ECDH control + cert verify | ✅ Default | the standard, supported runtime |
 | TCP + custom ECDH control + cert verify | ✅ Supported | set `proto tcp` |
 | Dev mode (no certificates) | ✅ Supported | no peer authentication |
-| Compression (`--comp-lzo`) | ✅ Supported | opt-in; both sides must agree |
+| Compression (`--comp-lzo`) | ✅ Supported | opt-in; sender-side flag, packets self-describe (per-packet comp byte), receiver only needs `lz4` installed |
 | Fragmentation | ✅ Automatic | triggered for > 1400 B payloads |
 | Multi-client | ✅ Supported | server mode with IP pool |
 | TLS 1.3 control channel | 🧪 Experimental | module only; not the default control path |
@@ -491,7 +505,7 @@ Wire format: [PacketID][Nonce][Ciphertext][Auth Tag]
 This section is the formal security frame. It intentionally lists what is **not**
 covered, because the project is educational.
 
-**Covered (implemented & tested — see `docs/SECURITY_MODEL`):**
+**Covered (implemented & tested — see [`docs/SECURITY_MODEL.md`](docs/SECURITY_MODEL.md)):**
 
 - Passive eavesdropping → AES-256-GCM encryption.
 - Man-in-the-middle → X.509 certificate verification + handshake signatures.
@@ -522,10 +536,17 @@ certifications, and support for untrusted/multi-tenant environments.
 ## Project Structure
 
 ```
-vpn-app/
+vpn-app-ai/
 ├── README.md
 ├── requirements.txt
 ├── setup.py
+├── pyproject.toml                  # pytest + ruff config
+├── docs/
+│   ├── ARCHITECTURE_AS_IS.md       # Authoritative as-built description
+│   ├── IMPLEMENTATION_STATUS.md    # Capability matrix
+│   ├── SECURITY_MODEL.md           # Security claims + evidence
+│   ├── SKILLS.md                   # Required knowledge map
+│   └── TEST_STRATEGY.md            # Test layers & CI expectations
 ├── examples/
 │   ├── server.conf
 │   └── client.conf
@@ -538,8 +559,8 @@ vpn-app/
 │   ├── tun_windows.py              # TUN interface (Windows, partial)
 │   ├── server.py                   # VPN server
 │   ├── client.py                   # VPN client
-│   ├── routing.py                  # Routing & iptables
-│   ├── status.py                   # Status file output
+│   ├── routing.py                  # Routing, NAT & iptables
+│   ├── status.py                   # Status file output (client)
 │   ├── privileges.py               # Opt-in privilege drop
 │   ├── crypto/
 │   │   ├── cipher.py               # AES-256-GCM
@@ -556,13 +577,17 @@ vpn-app/
 │   └── auth/
 │       └── __init__.py
 └── tests/
-    ├── test_handshake.py
+    ├── test_handshake.py           # Auth + dev-mode handshake flows
     ├── test_crypto.py
+    ├── test_config.py
+    ├── test_cli.py                 # CLI/file override semantics
     ├── test_data.py
     ├── test_replay.py
     ├── test_tls_channel.py
     ├── test_privileges.py
-    └── ...
+    ├── test_routing.py
+    ├── test_status.py
+    └── legacy/                     # Privileged system tests (root + TUN)
 ```
 
 ---
@@ -572,7 +597,8 @@ vpn-app/
 - Linux (TUN support)
 - Python 3.10+
 - Root privileges (for TUN device and iptables)
-- Dependencies: `cryptography`, `lz4` (optional)
+- Dependencies: `cryptography` (required), `lz4` (declared in packaging, but optional
+  at runtime — compression auto-disables with a warning if `lz4` is missing)
 
 ---
 

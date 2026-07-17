@@ -42,21 +42,20 @@ Cover:
 
 ## CI expectations
 
-### Pull requests
-Run:
-- lint,
-- unit tests,
-- packaging smoke test.
+Current reality (`.github/workflows/python-ci.yml`): a single job runs on both
+pull requests and pushes to `main`:
 
-### Main branch
-Run:
-- lint,
-- unit tests,
-- integration tests.
+- `ruff check .` (lint),
+- `pytest -v --tb=short` — all non-privileged tests (unit + integration;
+  `tests/legacy/` is excluded via `pyproject.toml`),
+- packaging smoke test (`pip install -e .` + import check).
 
 ### Manual or protected workflow
 Run:
-- privileged system tests.
+- privileged system tests (`tests/legacy/`, root + TUN).
+
+Planned: split PR/main pipelines and add an automated privileged system-test
+job (see README status matrix, "Integration CI (privileged)").
 
 ## Rules
 
