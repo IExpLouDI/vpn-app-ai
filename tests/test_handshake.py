@@ -97,6 +97,82 @@ class TestHandshake:
 
         assert decrypted == plain
 
+    def test_dev_mode_handshake(self):
+        """No certs on both sides: handshake succeeds without authentication."""
+        server_session = Session(is_server=True)
+        client_session = Session(is_server=False)
+
+        c1 = client_start_handshake(client_session)
+        s1 = server_handle_reset(server_session, c1[0])
+        c2 = client_handle_reset_ack(client_session, s1[0])
+        assert len(c2) == 1, "Client must send CLIENT_HELLO even without a cert"
+        _, _, payload = decode_packet(c2[0])
+
+        s2 = server_handle_client_hello(server_session, payload[1:])
+        assert len(s2) == 1
+        _, _, payload2 = decode_packet(s2[0])
+
+        c3 = client_handle_server_hello(client_session, payload2[1:])
+        assert len(c3) == 1
+        _, _, payload3 = decode_packet(c3[0])
+
+        server_handle_client_finished(server_session, payload3[1:])
+
+        assert client_session.is_established
+        assert server_session.is_established
+
+        c_dc = DataChannel(
+            client_session.session_id,
+            client_session.peer_session_id or b"",
+            client_session.cipher,
+        )
+        s_dc = DataChannel(
+            server_session.session_id,
+            server_session.peer_session_id or b"",
+            server_session.cipher,
+        )
+        plain = b"\x45\x00\x00\x2e...mock-ip-packet"
+        assert s_dc.decrypt(c_dc.encrypt(plain)[0]) == plain
+
+    def test_auth_server_rejects_certless_client(self, cert_files):
+        """Server with a CA must reject a dev-mode (certless) client."""
+        ca = str(cert_files / "ca.crt")
+        server_session = Session(is_server=True)
+        server_session.configure(
+            ca, str(cert_files / "server.crt"), str(cert_files / "server.key"),
+        )
+
+        client_session = Session(is_server=False)  # no certs = dev mode
+
+        c1 = client_start_handshake(client_session)
+        s1 = server_handle_reset(server_session, c1[0])
+        c2 = client_handle_reset_ack(client_session, s1[0])
+        _, _, payload = decode_packet(c2[0])
+        s2 = server_handle_client_hello(server_session, payload[1:])
+        assert len(s2) == 0, "Server must reject CLIENT_HELLO without a certificate"
+        assert not server_session.is_established
+
+    def test_auth_client_rejects_certless_server(self, cert_files):
+        """Client with a CA must reject a dev-mode (certless) server."""
+        ca = str(cert_files / "ca.crt")
+        client_session = Session(is_server=False)
+        client_session.configure(
+            ca, str(cert_files / "client.crt"), str(cert_files / "client.key"),
+        )
+
+        server_session = Session(is_server=True)  # no certs = dev mode
+
+        c1 = client_start_handshake(client_session)
+        s1 = server_handle_reset(server_session, c1[0])
+        c2 = client_handle_reset_ack(client_session, s1[0])
+        _, _, payload = decode_packet(c2[0])
+        s2 = server_handle_client_hello(server_session, payload[1:])
+        assert len(s2) == 1
+        _, _, payload2 = decode_packet(s2[0])
+        c3 = client_handle_server_hello(client_session, payload2[1:])
+        assert len(c3) == 0, "Client must reject SERVER_HELLO without a certificate"
+        assert not client_session.is_established
+
     def test_handshake_reject_bad_cert(self, cert_files, tmp_path):
         import datetime
 

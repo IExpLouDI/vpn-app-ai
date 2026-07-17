@@ -90,3 +90,27 @@ class TestConfig:
         conf.write_text("unknown-opt value1\n")
         cfg = Config.from_file(str(conf))
         assert cfg.extra_options.get("unknown-opt") == ["value1"]
+
+    def test_status_directive(self, tmp_path):
+        conf = tmp_path / "status.conf"
+        conf.write_text("status /tmp/vpn.status\n")
+        cfg = Config.from_file(str(conf))
+        assert cfg.status_file == "/tmp/vpn.status"
+        assert "status" not in cfg.extra_options
+
+    def test_invalid_port_rejected(self):
+        import pytest
+        with pytest.raises(ValueError, match="port"):
+            Config(port=0)
+        with pytest.raises(ValueError, match="port"):
+            Config(port=70000)
+
+    def test_invalid_proto_rejected(self):
+        import pytest
+        with pytest.raises(ValueError, match="proto"):
+            Config(proto="gre")
+
+    def test_invalid_verb_rejected(self):
+        import pytest
+        with pytest.raises(ValueError, match="verb"):
+            Config(verb=5)
