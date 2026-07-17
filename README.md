@@ -89,6 +89,9 @@ What is available in the **runtime today** (no flags required unless noted):
 
 ## Quick Start
 
+> For a complete two-machine walkthrough (certificates, settings reference,
+> troubleshooting) see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
 ### Prerequisites
 
 - Linux with TUN support (`/dev/net/tun`)
@@ -543,6 +546,7 @@ vpn-app-ai/
 ├── pyproject.toml                  # pytest + ruff config
 ├── docs/
 │   ├── ARCHITECTURE_AS_IS.md       # Authoritative as-built description
+│   ├── DEPLOYMENT.md               # Two-machine setup guide
 │   ├── IMPLEMENTATION_STATUS.md    # Capability matrix
 │   ├── SECURITY_MODEL.md           # Security claims + evidence
 │   ├── SKILLS.md                   # Required knowledge map
