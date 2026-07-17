@@ -78,12 +78,10 @@ What is available in the **runtime today** (no flags required unless noted):
 
 ## Planned Work
 
-- Certificate generation scripts (`certs/generate.sh`).
-- Privileged **integration CI** (root + TUN) automated in GitHub Actions.
-- Full **Windows** support (TUN driver + routing).
-- **DoS** protection / rate limiting on the handshake.
-- Key rotation / session renegotiation.
-- Memory secret locking (`mlock`).
+All remaining work — priorities, affected code, suggested approaches — lives in
+**[`docs/BACKLOG.md`](docs/BACKLOG.md)** (single source of truth for what to do
+next). Headline items: handshake DoS protection, certificate expiry validation,
+key rotation, privileged integration CI, full Windows support.
 
 ---
 
@@ -546,6 +544,7 @@ vpn-app-ai/
 ├── pyproject.toml                  # pytest + ruff config
 ├── docs/
 │   ├── ARCHITECTURE_AS_IS.md       # Authoritative as-built description
+│   ├── BACKLOG.md                  # Remaining work (single source of truth)
 │   ├── DEPLOYMENT.md               # Two-machine setup guide
 │   ├── IMPLEMENTATION_STATUS.md    # Capability matrix
 │   ├── SECURITY_MODEL.md           # Security claims + evidence
